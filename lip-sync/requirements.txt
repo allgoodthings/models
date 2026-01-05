@@ -1,0 +1,30 @@
+# Core ML dependencies (torch installed separately with CUDA)
+numpy>=1.24.0
+
+# Computer vision
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+scipy>=1.11.0
+scikit-image>=0.21.0
+
+# HuggingFace ecosystem
+huggingface-hub>=0.19.0
+safetensors>=0.4.0
+transformers>=4.35.0
+accelerate>=0.24.0
+diffusers>=0.24.0
+
+# Video processing
+ffmpeg-python>=0.2.0
+av>=10.0.0
+
+# API server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+httpx>=0.25.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

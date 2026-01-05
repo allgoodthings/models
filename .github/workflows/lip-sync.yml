@@ -1,0 +1,133 @@
+name: Build Lip-Sync Docker Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lip-sync/**'
+      - '.github/workflows/lip-sync.yml'
+    tags: ['lip-sync-v*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'lip-sync/**'
+  workflow_dispatch:
+    inputs:
+      include_models:
+        description: 'Include model weights in image (requires large runner)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/lip-sync
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=match,pattern=lip-sync-v(.*),group=1
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./lip-sync
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            SKIP_MODEL_DOWNLOAD=true
+
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: echo "Image pushed with tags ${{ steps.meta.outputs.tags }}"
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./lip-sync
+          push: false
+          load: true
+          tags: lip-sync:test
+          cache-from: type=gha
+          build-args: |
+            SKIP_MODEL_DOWNLOAD=true
+
+      - name: Test image starts
+        run: |
+          # Start container without GPU (will fail model loading but server should start)
+          docker run -d --name lipsync-test -p 8000:8000 -e PRELOAD_MODELS=false lip-sync:test
+
+          # Wait for server to start
+          sleep 15
+
+          # Check health endpoint
+          curl -f http://localhost:8000/health || (docker logs lipsync-test && exit 1)
+
+          # Check root endpoint
+          curl -f http://localhost:8000/ || (docker logs lipsync-test && exit 1)
+
+          # Cleanup
+          docker stop lipsync-test
+          docker rm lipsync-test
