@@ -6,6 +6,7 @@ Usage:
 """
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -29,6 +30,15 @@ from .schemas import (
     DetectFacesResponse,
 )
 
+# Configure logging
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger('lipsync.server')
+
 # Global pipeline instance
 pipeline: Optional[LipSyncPipeline] = None
 
@@ -38,21 +48,25 @@ MODELS_DIR = os.environ.get("MODELS_DIR", "/app/models")
 
 def check_models_exist() -> bool:
     """Check if model weights are present."""
+    logger.debug(f"Checking for models in {MODELS_DIR}")
     required_dirs = ["musetalk", "liveportrait", "codeformer"]
     for model_dir in required_dirs:
         path = os.path.join(MODELS_DIR, model_dir)
         if not os.path.exists(path):
+            logger.debug(f"  {model_dir}: NOT FOUND")
             return False
         # Check if directory has files (not just empty)
         if not any(os.scandir(path)):
+            logger.debug(f"  {model_dir}: EMPTY")
             return False
+        logger.debug(f"  {model_dir}: OK")
     return True
 
 
 def download_models() -> None:
     """Download model weights if not present."""
-    print(f"Downloading models to {MODELS_DIR}...")
-    print("This may take 10-15 minutes on first run...")
+    logger.info(f"Downloading models to {MODELS_DIR}...")
+    logger.info("This may take 10-15 minutes on first run...")
 
     # Try to import and run the download script
     try:
@@ -64,23 +78,25 @@ def download_models() -> None:
 
         os.makedirs(MODELS_DIR, exist_ok=True)
 
-        print("Downloading MuseTalk...")
+        logger.info("Downloading MuseTalk...")
         download_musetalk(MODELS_DIR)
 
-        print("Downloading LivePortrait...")
+        logger.info("Downloading LivePortrait...")
         download_liveportrait(MODELS_DIR)
 
-        print("Downloading CodeFormer...")
+        logger.info("Downloading CodeFormer...")
         download_codeformer(MODELS_DIR)
 
-        print("All models downloaded successfully!")
+        logger.info("All models downloaded successfully!")
 
-    except ImportError:
+    except ImportError as e:
+        logger.warning(f"Could not import download functions: {e}")
         # Fallback: run the script directly
         script_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "scripts", "download_models.py"
         )
         if os.path.exists(script_path):
+            logger.info(f"Running download script: {script_path}")
             subprocess.run(
                 [sys.executable, script_path, "--models-dir", MODELS_DIR],
                 check=True,

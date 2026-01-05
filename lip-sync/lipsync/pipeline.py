@@ -9,8 +9,12 @@ Orchestrates the complete lip-sync workflow:
 5. Composite back into original video
 """
 
+import logging
 import os
+import shutil
+import subprocess
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +38,9 @@ from .utils import (
     trim_video,
     generate_timestamp_chunks,
 )
+
+# Configure logging
+logger = logging.getLogger('lipsync.pipeline')
 
 
 @dataclass
@@ -94,8 +101,17 @@ class LipSyncPipeline:
             config: Pipeline configuration
         """
         self.config = config or PipelineConfig()
+        logger.info("Initializing LipSyncPipeline")
+        logger.debug(f"  Device: {self.config.device}")
+        logger.debug(f"  FP16: {self.config.fp16}")
+        logger.debug(f"  Aligned size: {self.config.aligned_size}")
+        logger.debug(f"  Enhance quality: {self.config.enhance_quality}")
+        logger.debug(f"  MuseTalk path: {self.config.musetalk_path}")
+        logger.debug(f"  LivePortrait path: {self.config.liveportrait_path}")
+        logger.debug(f"  CodeFormer path: {self.config.codeformer_path}")
 
         # Initialize models (lazy loading)
+        logger.debug("Creating model wrappers (lazy loading)...")
         self.musetalk = MuseTalk(MuseTalkConfig(
             model_path=self.config.musetalk_path,
             device=self.config.device,
@@ -121,27 +137,47 @@ class LipSyncPipeline:
         )
 
         self._models_loaded = False
+        logger.info("LipSyncPipeline initialized successfully")
 
     def load_models(self) -> None:
         """Load all models to GPU."""
         if self._models_loaded:
+            logger.debug("Models already loaded, skipping")
             return
 
-        print("Loading lip-sync pipeline models...")
+        logger.info("Loading lip-sync pipeline models to GPU...")
+        start_time = time.time()
+
+        logger.info("  Loading MuseTalk...")
+        musetalk_start = time.time()
         self.musetalk.load()
+        logger.info(f"  MuseTalk loaded in {time.time() - musetalk_start:.2f}s")
+
+        logger.info("  Loading LivePortrait...")
+        liveportrait_start = time.time()
         self.liveportrait.load()
+        logger.info(f"  LivePortrait loaded in {time.time() - liveportrait_start:.2f}s")
+
         if self.config.enhance_quality:
+            logger.info("  Loading CodeFormer...")
+            codeformer_start = time.time()
             self.codeformer.load()
+            logger.info(f"  CodeFormer loaded in {time.time() - codeformer_start:.2f}s")
+        else:
+            logger.info("  Skipping CodeFormer (enhance_quality=False)")
 
         self._models_loaded = True
-        print("All models loaded")
+        total_time = time.time() - start_time
+        logger.info(f"All models loaded in {total_time:.2f}s")
 
     def unload_models(self) -> None:
         """Unload all models from GPU."""
+        logger.info("Unloading models from GPU...")
         self.musetalk.unload()
         self.liveportrait.unload()
         self.codeformer.unload()
         self._models_loaded = False
+        logger.info("All models unloaded")
 
     def process_single_face(
         self,
@@ -165,13 +201,41 @@ class LipSyncPipeline:
         Returns:
             Path to output video
         """
+        logger.info("=" * 60)
+        logger.info("STARTING SINGLE FACE LIP-SYNC")
+        logger.info("=" * 60)
+        logger.info(f"  Video: {video_path}")
+        logger.info(f"  Audio: {audio_path}")
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Target bbox: {target_bbox}")
+
+        pipeline_start = time.time()
+
+        # Validate inputs
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+        video_size = os.path.getsize(video_path) / (1024 * 1024)
+        audio_size = os.path.getsize(audio_path) / (1024 * 1024)
+        logger.debug(f"  Video size: {video_size:.2f} MB")
+        logger.debug(f"  Audio size: {audio_size:.2f} MB")
+
         self.load_models()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            logger.debug(f"Using temp directory: {tmpdir}")
+
             # Step 1: Align face
+            logger.info("-" * 40)
+            logger.info("STEP 1: Face Alignment")
+            logger.info("-" * 40)
             aligned_path = os.path.join(tmpdir, "aligned.mp4")
-            print("Aligning face...")
+            step_start = time.time()
+
             try:
+                logger.debug(f"  Calling align_video with target_bbox={target_bbox}")
                 align_metadata = align_video(
                     video_path,
                     aligned_path,
@@ -179,68 +243,131 @@ class LipSyncPipeline:
                     output_size=self.config.aligned_size,
                 )
                 has_alignment = True
+                logger.info(f"  Alignment successful in {time.time() - step_start:.2f}s")
+                logger.debug(f"  Avg face size: {align_metadata.avg_face_size:.2f}%")
+                logger.debug(f"  Output: {aligned_path}")
             except Exception as e:
-                print(f"Alignment failed: {e}, continuing without alignment")
+                logger.warning(f"  Alignment failed: {e}")
+                logger.warning("  Continuing without alignment...")
                 aligned_path = video_path
                 align_metadata = None
                 has_alignment = False
 
             # Step 2: Neutralize with LivePortrait
+            logger.info("-" * 40)
+            logger.info("STEP 2: Expression Neutralization (LivePortrait)")
+            logger.info("-" * 40)
             neutral_path = os.path.join(tmpdir, "neutral.mp4")
-            print("Neutralizing expressions...")
+            step_start = time.time()
+
             try:
+                logger.debug(f"  Input: {aligned_path}")
+                logger.debug(f"  lip_ratio: 0.0")
                 self.liveportrait.neutralize(
                     aligned_path,
                     neutral_path,
                     lip_ratio=0.0,
                 )
+                logger.info(f"  Neutralization successful in {time.time() - step_start:.2f}s")
+                logger.debug(f"  Output: {neutral_path}")
             except Exception as e:
-                print(f"Neutralization failed: {e}, continuing with aligned video")
+                logger.warning(f"  Neutralization failed: {e}")
+                logger.warning("  Continuing with aligned video...")
                 neutral_path = aligned_path
 
             # Step 3: Lip-sync with MuseTalk
+            logger.info("-" * 40)
+            logger.info("STEP 3: Lip-Sync Generation (MuseTalk)")
+            logger.info("-" * 40)
             lipsync_path = os.path.join(tmpdir, "lipsync.mp4")
-            print("Generating lip-sync...")
+            step_start = time.time()
+
+            logger.debug(f"  Video input: {neutral_path}")
+            logger.debug(f"  Audio input: {audio_path}")
             self.musetalk.process(
                 neutral_path,
                 audio_path,
                 lipsync_path,
             )
+            logger.info(f"  Lip-sync generation successful in {time.time() - step_start:.2f}s")
+            logger.debug(f"  Output: {lipsync_path}")
 
             # Step 4: Enhance with CodeFormer
             if self.config.enhance_quality:
+                logger.info("-" * 40)
+                logger.info("STEP 4: Quality Enhancement (CodeFormer)")
+                logger.info("-" * 40)
                 enhanced_path = os.path.join(tmpdir, "enhanced.mp4")
-                print("Enhancing quality...")
+                step_start = time.time()
+
                 blend_ratio = CodeFormer.compute_blend_ratio(
                     align_metadata.avg_face_size if align_metadata else 5.0
                 )
+                logger.debug(f"  Input: {lipsync_path}")
+                logger.debug(f"  Blend ratio: {blend_ratio:.2f}")
+                logger.debug(f"  Has aligned: {has_alignment}")
+
                 self.codeformer.enhance_video(
                     lipsync_path,
                     enhanced_path,
                     blend_ratio=blend_ratio,
                     has_aligned=has_alignment,
                 )
+                logger.info(f"  Enhancement successful in {time.time() - step_start:.2f}s")
+                logger.debug(f"  Output: {enhanced_path}")
             else:
+                logger.info("-" * 40)
+                logger.info("STEP 4: Skipping Enhancement (disabled)")
+                logger.info("-" * 40)
                 enhanced_path = lipsync_path
 
             # Step 5: Unalign back to original video
             if has_alignment and align_metadata:
+                logger.info("-" * 40)
+                logger.info("STEP 5: Unalignment (back to original frame)")
+                logger.info("-" * 40)
                 unaligned_path = os.path.join(tmpdir, "unaligned.mp4")
-                print("Unaligning video...")
+                step_start = time.time()
+
+                logger.debug(f"  Input: {enhanced_path}")
+                logger.debug(f"  Original video: {video_path}")
                 unalign_video(
                     enhanced_path,
                     video_path,
                     align_metadata,
                     unaligned_path,
                 )
+                logger.info(f"  Unalignment successful in {time.time() - step_start:.2f}s")
+                logger.debug(f"  Output: {unaligned_path}")
             else:
+                logger.info("-" * 40)
+                logger.info("STEP 5: Skipping Unalignment (no alignment metadata)")
+                logger.info("-" * 40)
                 unaligned_path = enhanced_path
 
             # Step 6: Add audio
-            print("Adding audio...")
-            combine_audio_video(unaligned_path, audio_path, output_path)
+            logger.info("-" * 40)
+            logger.info("STEP 6: Combining Audio and Video")
+            logger.info("-" * 40)
+            step_start = time.time()
 
-        print(f"Lip-sync complete: {output_path}")
+            logger.debug(f"  Video: {unaligned_path}")
+            logger.debug(f"  Audio: {audio_path}")
+            logger.debug(f"  Output: {output_path}")
+            combine_audio_video(unaligned_path, audio_path, output_path)
+            logger.info(f"  Audio combined in {time.time() - step_start:.2f}s")
+
+        # Done
+        total_time = time.time() - pipeline_start
+        output_size = os.path.getsize(output_path) / (1024 * 1024)
+
+        logger.info("=" * 60)
+        logger.info("SINGLE FACE LIP-SYNC COMPLETE")
+        logger.info("=" * 60)
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Output size: {output_size:.2f} MB")
+        logger.info(f"  Total time: {total_time:.2f}s")
+
         return output_path
 
     def process_multi_face(
@@ -263,11 +390,26 @@ class LipSyncPipeline:
         Returns:
             Path to output video
         """
+        logger.info("=" * 60)
+        logger.info("STARTING MULTI-FACE LIP-SYNC")
+        logger.info("=" * 60)
+        logger.info(f"  Video: {video_path}")
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Number of faces: {len(face_jobs)}")
+
+        for i, job in enumerate(face_jobs):
+            logger.info(f"  Face {i+1}: {job.character_id}")
+            logger.debug(f"    bbox: {job.bbox}")
+            logger.debug(f"    time: {job.start_time_ms}ms - {job.end_time_ms}ms")
+            logger.debug(f"    audio: {job.audio_path}")
+
+        pipeline_start = time.time()
+
         if not face_jobs:
             raise ValueError("No face jobs provided")
 
         if len(face_jobs) == 1:
-            # Single face - use simpler path
+            logger.info("Single face detected, using simpler path")
             job = face_jobs[0]
             return self.process_single_face(
                 video_path,
@@ -278,21 +420,34 @@ class LipSyncPipeline:
 
         self.load_models()
 
+        logger.debug("Getting video info...")
         video_info = get_video_info(video_path)
+        logger.debug(f"  FPS: {video_info.fps}")
+        logger.debug(f"  Duration: {video_info.duration}s")
+        logger.debug(f"  Resolution: {video_info.width}x{video_info.height}")
+
         face_regions: List[FaceRegion] = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            logger.debug(f"Using temp directory: {tmpdir}")
+
             # Process each face independently
             for i, job in enumerate(face_jobs):
-                print(f"Processing face {i+1}/{len(face_jobs)}: {job.character_id}")
+                logger.info("-" * 40)
+                logger.info(f"PROCESSING FACE {i+1}/{len(face_jobs)}: {job.character_id}")
+                logger.info("-" * 40)
+                face_start = time.time()
 
                 try:
                     # Trim video to face time range
+                    logger.debug(f"  Trimming video: {job.start_time}s - {job.end_time}s")
                     trimmed_path = os.path.join(tmpdir, f"trimmed_{i}.mp4")
                     trim_video(video_path, trimmed_path, job.start_time, job.end_time)
+                    logger.debug(f"  Trimmed: {trimmed_path}")
 
                     # Process the trimmed video with target bbox
                     processed_path = os.path.join(tmpdir, f"processed_{i}.mp4")
+                    logger.debug(f"  Processing segment with bbox {job.bbox}...")
                     self._process_face_segment(
                         trimmed_path,
                         job.audio_path,
@@ -300,13 +455,17 @@ class LipSyncPipeline:
                         job.bbox,
                         tmpdir,
                     )
+                    logger.debug(f"  Processed: {processed_path}")
 
                     # Extract processed frames
+                    logger.debug("  Extracting frames from processed video...")
                     processed_frames = self._extract_frames(processed_path)
+                    logger.debug(f"  Extracted {len(processed_frames)} frames")
 
                     # Calculate frame range
                     start_frame = int(job.start_time * video_info.fps)
                     end_frame = int(job.end_time * video_info.fps)
+                    logger.debug(f"  Frame range: {start_frame} - {end_frame}")
 
                     face_regions.append(FaceRegion(
                         bbox=job.bbox,
@@ -316,35 +475,70 @@ class LipSyncPipeline:
                         character_id=job.character_id,
                     ))
 
+                    face_time = time.time() - face_start
+                    logger.info(f"  Face {job.character_id} processed in {face_time:.2f}s")
+
                 except Exception as e:
-                    print(f"Failed to process face {job.character_id}: {e}")
+                    logger.error(f"  Failed to process face {job.character_id}: {e}")
+                    logger.exception("  Full traceback:")
                     continue
 
             if not face_regions:
                 raise RuntimeError("All face processing failed")
 
+            logger.info(f"Successfully processed {len(face_regions)}/{len(face_jobs)} faces")
+
             # Composite all faces back into original video
-            print("Compositing faces...")
+            logger.info("-" * 40)
+            logger.info("COMPOSITING FACES")
+            logger.info("-" * 40)
             composited_path = os.path.join(tmpdir, "composited.mp4")
+            step_start = time.time()
+
+            logger.debug(f"  Compositing {len(face_regions)} face regions...")
             self.compositor.composite_video_from_paths(
                 video_path,
                 face_regions,
                 composited_path,
             )
+            logger.info(f"  Compositing done in {time.time() - step_start:.2f}s")
 
-            # Extract and add combined audio
-            # For multi-face, we need to mix the audio tracks
+            # Mix audio tracks
+            logger.info("-" * 40)
+            logger.info("MIXING AUDIO TRACKS")
+            logger.info("-" * 40)
             combined_audio_path = os.path.join(tmpdir, "combined_audio.wav")
+            step_start = time.time()
+
+            logger.debug(f"  Mixing {len(face_jobs)} audio tracks...")
             self._mix_audio_tracks(
                 [job.audio_path for job in face_jobs],
                 [(job.start_time, job.end_time) for job in face_jobs],
                 video_info.duration,
                 combined_audio_path,
             )
+            logger.info(f"  Audio mixed in {time.time() - step_start:.2f}s")
 
+            # Combine final video
+            logger.info("-" * 40)
+            logger.info("COMBINING FINAL VIDEO")
+            logger.info("-" * 40)
+            step_start = time.time()
             combine_audio_video(composited_path, combined_audio_path, output_path)
+            logger.info(f"  Final video created in {time.time() - step_start:.2f}s")
 
-        print(f"Multi-face lip-sync complete: {output_path}")
+        # Done
+        total_time = time.time() - pipeline_start
+        output_size = os.path.getsize(output_path) / (1024 * 1024)
+
+        logger.info("=" * 60)
+        logger.info("MULTI-FACE LIP-SYNC COMPLETE")
+        logger.info("=" * 60)
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Output size: {output_size:.2f} MB")
+        logger.info(f"  Faces processed: {len(face_regions)}/{len(face_jobs)}")
+        logger.info(f"  Total time: {total_time:.2f}s")
+
         return output_path
 
     def _process_face_segment(
@@ -356,44 +550,57 @@ class LipSyncPipeline:
         tmpdir: str,
     ) -> None:
         """Process a single face segment."""
+        logger.debug(f"    _process_face_segment: bbox={bbox}")
+
         # Align with target bbox
         aligned_path = os.path.join(tmpdir, f"aligned_{uuid.uuid4()}.mp4")
+        logger.debug(f"    Aligning face...")
         align_metadata = align_video(
             video_path,
             aligned_path,
             target_bbox=bbox,
             output_size=self.config.aligned_size,
         )
+        logger.debug(f"    Aligned: {aligned_path}")
 
         # Neutralize
         neutral_path = os.path.join(tmpdir, f"neutral_{uuid.uuid4()}.mp4")
+        logger.debug(f"    Neutralizing...")
         self.liveportrait.neutralize(aligned_path, neutral_path, lip_ratio=0.0)
+        logger.debug(f"    Neutralized: {neutral_path}")
 
         # Lip-sync
         lipsync_path = os.path.join(tmpdir, f"lipsync_{uuid.uuid4()}.mp4")
+        logger.debug(f"    Generating lip-sync...")
         self.musetalk.process(neutral_path, audio_path, lipsync_path)
+        logger.debug(f"    Lip-synced: {lipsync_path}")
 
         # Enhance
         if self.config.enhance_quality:
             enhanced_path = os.path.join(tmpdir, f"enhanced_{uuid.uuid4()}.mp4")
             blend_ratio = CodeFormer.compute_blend_ratio(align_metadata.avg_face_size)
+            logger.debug(f"    Enhancing (blend_ratio={blend_ratio:.2f})...")
             self.codeformer.enhance_video(
                 lipsync_path,
                 enhanced_path,
                 blend_ratio=blend_ratio,
                 has_aligned=True,
             )
+            logger.debug(f"    Enhanced: {enhanced_path}")
         else:
             enhanced_path = lipsync_path
 
         # Copy to output
-        import shutil
+        logger.debug(f"    Copying to output: {output_path}")
         shutil.copy(enhanced_path, output_path)
 
     def _extract_frames(self, video_path: str) -> List[np.ndarray]:
         """Extract all frames from video."""
         frames = []
         cap = cv2.VideoCapture(video_path)
+
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        logger.debug(f"    Extracting {frame_count} frames from {video_path}")
 
         while True:
             ret, frame = cap.read()
@@ -402,6 +609,7 @@ class LipSyncPipeline:
             frames.append(frame)
 
         cap.release()
+        logger.debug(f"    Extracted {len(frames)} frames")
         return frames
 
     def _mix_audio_tracks(
@@ -412,7 +620,7 @@ class LipSyncPipeline:
         output_path: str,
     ) -> str:
         """Mix multiple audio tracks at specified time offsets."""
-        import subprocess
+        logger.debug(f"  Mixing {len(audio_paths)} audio tracks")
 
         # Build FFmpeg filter for mixing
         inputs = []
@@ -422,6 +630,7 @@ class LipSyncPipeline:
             inputs.extend(['-i', audio_path])
             delay_ms = int(start * 1000)
             delays.append(f'[{i}:a]adelay={delay_ms}|{delay_ms}[a{i}]')
+            logger.debug(f"    Track {i}: {audio_path} (delay={delay_ms}ms)")
 
         # Mix all delayed tracks
         mix_inputs = ''.join(f'[a{i}]' for i in range(len(audio_paths)))
@@ -436,7 +645,10 @@ class LipSyncPipeline:
             output_path,
         ]
 
-        subprocess.run(cmd, capture_output=True, check=True)
+        logger.debug(f"  FFmpeg command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, check=True)
+        logger.debug(f"  Audio mixed: {output_path}")
+
         return output_path
 
     @property
@@ -465,6 +677,7 @@ def process_lipsync(
     Returns:
         Path to output video
     """
+    logger.info("process_lipsync() called")
     pipeline = LipSyncPipeline(config)
     return pipeline.process_single_face(
         video_path,

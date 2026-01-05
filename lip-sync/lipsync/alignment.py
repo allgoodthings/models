@@ -7,7 +7,9 @@ Based on SieveSync's alignment implementation with modifications for:
 - Better error handling
 """
 
+import logging
 import os
+import time
 import numpy as np
 import cv2
 import mediapipe as mp
@@ -15,6 +17,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger('lipsync.alignment')
 
 
 @dataclass
@@ -41,6 +45,7 @@ class FaceAligner:
         Args:
             max_num_faces: Maximum faces to detect. Set > 1 for multi-face.
         """
+        logger.debug(f"Initializing FaceAligner with max_num_faces={max_num_faces}")
         self.face_mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=max_num_faces,
@@ -48,6 +53,7 @@ class FaceAligner:
             min_tracking_confidence=0.1,
             refine_landmarks=True,
         )
+        logger.debug("FaceMesh initialized successfully")
 
     def get_landmarks(
         self,
@@ -65,6 +71,7 @@ class FaceAligner:
             468 facial landmarks as (x, y) coordinates, or None if no face found
         """
         ih, iw = image.shape[:2]
+        logger.debug(f"get_landmarks: image size={iw}x{ih}, target_bbox={target_bbox}")
 
         if target_bbox is not None:
             # Crop to target region with margin
@@ -76,11 +83,15 @@ class FaceAligner:
             y2 = min(ih, int(y + h * (1 + margin)))
 
             crop = image[y1:y2, x1:x2]
+            logger.debug(f"  Cropped region: ({x1},{y1}) to ({x2},{y2}), crop size={crop.shape[1]}x{crop.shape[0]}")
             crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
             results = self.face_mesh.process(crop_rgb)
 
             if not results.multi_face_landmarks:
+                logger.debug("  No face landmarks found in cropped region")
                 return None
+
+            logger.debug(f"  Found {len(results.multi_face_landmarks)} face(s) in cropped region")
 
             # Find the face closest to center of target bbox
             target_center = np.array([x + w/2 - x1, y + h/2 - y1])
@@ -104,14 +115,19 @@ class FaceAligner:
                 # Translate back to original image coordinates
                 best_landmarks[:, 0] += x1
                 best_landmarks[:, 1] += y1
+                logger.debug(f"  Selected face with distance={best_distance:.2f} from target center")
                 return best_landmarks
+            logger.debug("  No suitable face found near target bbox")
             return None
         else:
             # Original behavior - detect in full image
+            logger.debug("  Detecting face in full image (no target_bbox)")
             results = self.face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             if not results.multi_face_landmarks:
+                logger.debug("  No face landmarks found in full image")
                 return None
             landmarks = results.multi_face_landmarks[0].landmark
+            logger.debug(f"  Found face with {len(landmarks)} landmarks")
             return np.array([(int(lm.x * iw), int(lm.y * ih)) for lm in landmarks])
 
     def get_transform_params(self, landmarks: np.ndarray) -> np.ndarray:
@@ -216,6 +232,17 @@ def align_video(
     Returns:
         AlignmentMetadata with transformation info
     """
+    logger.info("=" * 50)
+    logger.info("ALIGN VIDEO - Starting")
+    logger.info("=" * 50)
+    logger.info(f"  Input: {input_path}")
+    logger.info(f"  Output: {output_path}")
+    logger.info(f"  Target bbox: {target_bbox}")
+    logger.info(f"  Smooth frames: {smooth_frames}")
+    logger.info(f"  Output size: {output_size}x{output_size}")
+
+    start_time = time.time()
+
     aligner = FaceAligner(max_num_faces=5 if target_bbox else 1)
 
     cap = cv2.VideoCapture(input_path)
@@ -223,6 +250,8 @@ def align_video(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    logger.info(f"  Video info: {width}x{height} @ {fps:.2f}fps, {total_frames} frames")
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (output_size, output_size))
@@ -336,11 +365,22 @@ def align_video(
     cap.release()
     out.release()
 
+    elapsed = time.time() - start_time
+    logger.info(f"  Face detection stats:")
+    logger.info(f"    Frames without landmarks: {frames_without_landmarks}/{total_frames} ({frames_without_landmarks/total_frames*100:.1f}%)")
+    logger.info(f"    Elapsed time: {elapsed:.2f}s ({total_frames/elapsed:.1f} fps)")
+
     # Validate detection rate
     if total_frames > 0 and frames_without_landmarks / total_frames > 0.4:
-        raise ValueError(f"Face detection failed in {frames_without_landmarks/total_frames:.1%} of frames")
+        error_msg = f"Face detection failed in {frames_without_landmarks/total_frames:.1%} of frames"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
     avg_face_size = np.mean(face_areas) * 100 if face_areas else 0
+
+    logger.info(f"  Average face size: {avg_face_size:.2f}% of frame")
+    logger.info(f"  Output saved to: {output_path}")
+    logger.info("ALIGN VIDEO - Complete")
 
     return AlignmentMetadata(
         fps=fps,
@@ -365,6 +405,16 @@ def unalign_video(
         metadata: Alignment metadata from align_video
         output_path: Path for output video
     """
+    logger.info("=" * 50)
+    logger.info("UNALIGN VIDEO - Starting")
+    logger.info("=" * 50)
+    logger.info(f"  Aligned: {aligned_path}")
+    logger.info(f"  Source: {source_path}")
+    logger.info(f"  Output: {output_path}")
+    logger.info(f"  Frames to process: {metadata.frame_count}")
+
+    start_time = time.time()
+
     from skimage import exposure
 
     aligned_cap = cv2.VideoCapture(aligned_path)
@@ -438,6 +488,11 @@ def unalign_video(
     source_cap.release()
     out.release()
 
+    elapsed = time.time() - start_time
+    logger.info(f"  Elapsed time: {elapsed:.2f}s ({total_frames/elapsed:.1f} fps)")
+    logger.info(f"  Output saved to: {output_path}")
+    logger.info("UNALIGN VIDEO - Complete")
+
 
 def align_image(
     image: np.ndarray,
@@ -455,13 +510,17 @@ def align_image(
     Returns:
         Tuple of (aligned_image, transform_matrix, landmarks) or (None, None, None)
     """
+    logger.debug(f"align_image: image size={image.shape[1]}x{image.shape[0]}, target_bbox={target_bbox}, output_size={output_size}")
+
     aligner = FaceAligner(max_num_faces=5 if target_bbox else 1)
     landmarks = aligner.get_landmarks(image, target_bbox)
 
     if landmarks is None:
+        logger.debug("align_image: No landmarks found, returning None")
         return None, None, None
 
     quad = aligner.get_transform_params(landmarks)
     aligned, M = aligner.align_face(image, quad, output_size)
 
+    logger.debug(f"align_image: Aligned to {aligned.shape[1]}x{aligned.shape[0]}")
     return aligned, M, landmarks

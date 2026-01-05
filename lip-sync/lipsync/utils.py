@@ -4,10 +4,12 @@ Utility functions for video/audio processing.
 Includes FFmpeg wrappers, frame extraction, and timestamp handling.
 """
 
+import logging
 import os
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple, Generator
@@ -15,6 +17,8 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger('lipsync.utils')
 
 
 @dataclass
@@ -37,6 +41,7 @@ def get_video_info(video_path: str) -> VideoInfo:
     Returns:
         VideoInfo with metadata
     """
+    logger.debug(f"Getting video info for: {video_path}")
     cap = cv2.VideoCapture(video_path)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -44,6 +49,8 @@ def get_video_info(video_path: str) -> VideoInfo:
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = frame_count / fps if fps > 0 else 0
     cap.release()
+
+    logger.debug(f"  -> {width}x{height} @ {fps:.2f}fps, {frame_count} frames, {duration:.2f}s")
 
     return VideoInfo(
         width=width,
@@ -194,6 +201,13 @@ def combine_audio_video(
     Returns:
         Path to combined video
     """
+    logger.info(f"Combining audio and video:")
+    logger.info(f"  Video: {video_path}")
+    logger.info(f"  Audio: {audio_path}")
+    logger.info(f"  Output: {output_path}")
+
+    start_time = time.time()
+
     cmd = [
         'ffmpeg', '-y',
         '-i', video_path,
@@ -204,7 +218,13 @@ def combine_audio_video(
         '-shortest',
         output_path
     ]
-    subprocess.run(cmd, capture_output=True, check=True)
+    logger.debug(f"  Command: {' '.join(cmd)}")
+
+    result = subprocess.run(cmd, capture_output=True, check=True)
+
+    elapsed = time.time() - start_time
+    logger.info(f"  Completed in {elapsed:.2f}s")
+
     return output_path
 
 
@@ -343,6 +363,13 @@ def frames_to_video(
         raise ValueError("No frames provided")
 
     height, width = frames[0].shape[:2]
+    logger.info(f"Creating video from {len(frames)} frames:")
+    logger.info(f"  Size: {width}x{height}")
+    logger.info(f"  FPS: {fps}")
+    logger.info(f"  Output: {output_path}")
+
+    start_time = time.time()
+
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
@@ -350,6 +377,10 @@ def frames_to_video(
         out.write(frame)
 
     out.release()
+
+    elapsed = time.time() - start_time
+    logger.info(f"  Completed in {elapsed:.2f}s ({len(frames)/elapsed:.1f} fps)")
+
     return output_path
 
 

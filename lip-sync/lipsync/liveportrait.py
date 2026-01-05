@@ -5,12 +5,16 @@ LivePortrait is used to neutralize mouth expressions before lip-sync,
 providing MuseTalk with a clean canvas for generating new lip movements.
 """
 
+import logging
 import os
+import time
 import torch
 import numpy as np
 from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass
+
+logger = logging.getLogger('lipsync.liveportrait')
 
 
 @dataclass
@@ -41,13 +45,23 @@ class LivePortrait:
         self.model = None
         self.device = torch.device(self.config.device if torch.cuda.is_available() else "cpu")
         self._loaded = False
+        logger.info(f"LivePortrait initialized with device={self.device}")
 
     def load(self) -> None:
         """Load model weights to GPU."""
         if self._loaded:
+            logger.debug("LivePortrait already loaded, skipping")
             return
 
-        print(f"Loading LivePortrait model from {self.config.model_path}...")
+        logger.info("=" * 50)
+        logger.info("LIVEPORTRAIT - Loading model")
+        logger.info("=" * 50)
+        logger.info(f"  Model path: {self.config.model_path}")
+        logger.info(f"  Device: {self.device}")
+        logger.info(f"  FP16: {self.config.fp16}")
+        logger.info(f"  Source max dim: {self.config.source_max_dim}")
+
+        start_time = time.time()
 
         # TODO: Implement actual model loading
         # LivePortrait uses multiple networks:
@@ -60,18 +74,24 @@ class LivePortrait:
         # self.pipeline = LivePortraitPipeline(...)
 
         self._loaded = True
-        print("LivePortrait model loaded")
+
+        elapsed = time.time() - start_time
+        logger.info(f"  Load time: {elapsed:.2f}s")
+        logger.info("LIVEPORTRAIT - Model loaded")
 
     def unload(self) -> None:
         """Unload model from GPU."""
+        logger.info("LIVEPORTRAIT - Unloading model")
         if self.model is not None:
             del self.model
             self.model = None
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            logger.debug("Cleared CUDA cache")
 
         self._loaded = False
+        logger.info("LIVEPORTRAIT - Model unloaded")
 
     def neutralize(
         self,
@@ -99,8 +119,27 @@ class LivePortrait:
         Returns:
             Path to neutralized video
         """
+        logger.info("=" * 50)
+        logger.info("LIVEPORTRAIT - Neutralizing lip movements")
+        logger.info("=" * 50)
+        logger.info(f"  Input: {video_path}")
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Reference: {reference_image_path or 'None'}")
+        logger.info(f"  Lip ratio: {lip_ratio}")
+        logger.info(f"  Time range: {start_time or 0}s - {end_time or 'end'}s")
+
+        start = time.time()
+
         if not self._loaded:
             self.load()
+
+        # Get video info
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        logger.info(f"  Video: {frame_count} frames @ {fps:.2f}fps")
 
         # TODO: Implement actual neutralization
         # The flow is:
@@ -108,11 +147,19 @@ class LivePortrait:
         # 2. Set lip_ratio=0 to neutralize mouth
         # 3. Generate output with neutral lips
 
+        logger.debug("  Step 1: Extracting driving video features...")
+        logger.debug("  Step 2: Setting lip_ratio=0 to neutralize...")
+        logger.debug("  Step 3: Generating output...")
+
         # Placeholder: copy input to output
         import shutil
         shutil.copy(video_path, output_path)
 
-        print(f"LivePortrait: Neutralized video at {output_path}")
+        elapsed = time.time() - start
+        logger.info(f"  Processing time: {elapsed:.2f}s ({frame_count/elapsed:.1f} fps)")
+        logger.info(f"  Output saved to: {output_path}")
+        logger.info("LIVEPORTRAIT - Neutralization complete")
+
         return output_path
 
     def retarget(

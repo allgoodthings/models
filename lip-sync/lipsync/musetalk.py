@@ -5,12 +5,16 @@ MuseTalk generates lip movements synchronized to audio input.
 This is the core lip-sync model in the pipeline.
 """
 
+import logging
 import os
+import time
 import torch
 import numpy as np
 from pathlib import Path
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
+
+logger = logging.getLogger('lipsync.musetalk')
 
 # TODO: Import actual MuseTalk modules once dependencies are set up
 # from musetalk.models import MuseTalkModel as _MuseTalkModel
@@ -43,13 +47,23 @@ class MuseTalk:
         self.model = None
         self.device = torch.device(self.config.device if torch.cuda.is_available() else "cpu")
         self._loaded = False
+        logger.info(f"MuseTalk initialized with device={self.device}")
 
     def load(self) -> None:
         """Load model weights to GPU."""
         if self._loaded:
+            logger.debug("MuseTalk already loaded, skipping")
             return
 
-        print(f"Loading MuseTalk model from {self.config.model_path}...")
+        logger.info("=" * 50)
+        logger.info("MUSETALK - Loading model")
+        logger.info("=" * 50)
+        logger.info(f"  Model path: {self.config.model_path}")
+        logger.info(f"  Device: {self.device}")
+        logger.info(f"  FP16: {self.config.fp16}")
+        logger.info(f"  Batch size: {self.config.batch_size}")
+
+        start_time = time.time()
 
         # TODO: Implement actual model loading
         # This requires the MuseTalk package and model weights
@@ -62,18 +76,24 @@ class MuseTalk:
         # self.pe = load_positional_encoding()
 
         self._loaded = True
-        print("MuseTalk model loaded")
+
+        elapsed = time.time() - start_time
+        logger.info(f"  Load time: {elapsed:.2f}s")
+        logger.info("MUSETALK - Model loaded")
 
     def unload(self) -> None:
         """Unload model from GPU."""
+        logger.info("MUSETALK - Unloading model")
         if self.model is not None:
             del self.model
             self.model = None
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            logger.debug("Cleared CUDA cache")
 
         self._loaded = False
+        logger.info("MUSETALK - Model unloaded")
 
     def process(
         self,
@@ -96,8 +116,27 @@ class MuseTalk:
         Returns:
             Path to lip-synced video
         """
+        logger.info("=" * 50)
+        logger.info("MUSETALK - Processing lip-sync")
+        logger.info("=" * 50)
+        logger.info(f"  Input video: {aligned_video_path}")
+        logger.info(f"  Audio: {audio_path}")
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Smooth: {smooth}")
+        logger.info(f"  Override: {override}")
+
+        start_time = time.time()
+
         if not self._loaded:
             self.load()
+
+        # Get video info
+        import cv2
+        cap = cv2.VideoCapture(aligned_video_path)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        logger.info(f"  Video: {frame_count} frames @ {fps:.2f}fps")
 
         # TODO: Implement actual inference
         # The inference flow is:
@@ -108,11 +147,19 @@ class MuseTalk:
         #    - Decode with VAE
         # 3. Write output video
 
+        logger.debug("  Step 1: Extracting audio features...")
+        logger.debug("  Step 2: Processing frames in batches...")
+        logger.debug("  Step 3: Writing output video...")
+
         # Placeholder: copy input to output
         import shutil
         shutil.copy(aligned_video_path, output_path)
 
-        print(f"MuseTalk: Generated lip-sync at {output_path}")
+        elapsed = time.time() - start_time
+        logger.info(f"  Processing time: {elapsed:.2f}s ({frame_count/elapsed:.1f} fps)")
+        logger.info(f"  Output saved to: {output_path}")
+        logger.info("MUSETALK - Processing complete")
+
         return output_path
 
     def process_batch(

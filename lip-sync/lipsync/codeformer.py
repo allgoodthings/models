@@ -5,13 +5,17 @@ CodeFormer enhances face quality after lip-sync processing,
 reducing artifacts and improving visual fidelity.
 """
 
+import logging
 import os
+import time
 import torch
 import numpy as np
 from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass
 import cv2
+
+logger = logging.getLogger('lipsync.codeformer')
 
 
 @dataclass
@@ -45,13 +49,24 @@ class CodeFormer:
         self.model = None
         self.device = torch.device(self.config.device if torch.cuda.is_available() else "cpu")
         self._loaded = False
+        logger.info(f"CodeFormer initialized with device={self.device}")
 
     def load(self) -> None:
         """Load model weights to GPU."""
         if self._loaded:
+            logger.debug("CodeFormer already loaded, skipping")
             return
 
-        print(f"Loading CodeFormer model from {self.config.model_path}...")
+        logger.info("=" * 50)
+        logger.info("CODEFORMER - Loading model")
+        logger.info("=" * 50)
+        logger.info(f"  Model path: {self.config.model_path}")
+        logger.info(f"  Device: {self.device}")
+        logger.info(f"  FP16: {self.config.fp16}")
+        logger.info(f"  Fidelity weight: {self.config.fidelity_weight}")
+        logger.info(f"  Upscale: {self.config.upscale}")
+
+        start_time = time.time()
 
         # TODO: Implement actual model loading
         # CodeFormer uses GFPGAN architecture with codebook
@@ -62,18 +77,24 @@ class CodeFormer:
         # self.net.eval().to(self.device)
 
         self._loaded = True
-        print("CodeFormer model loaded")
+
+        elapsed = time.time() - start_time
+        logger.info(f"  Load time: {elapsed:.2f}s")
+        logger.info("CODEFORMER - Model loaded")
 
     def unload(self) -> None:
         """Unload model from GPU."""
+        logger.info("CODEFORMER - Unloading model")
         if self.model is not None:
             del self.model
             self.model = None
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            logger.debug("Cleared CUDA cache")
 
         self._loaded = False
+        logger.info("CODEFORMER - Model unloaded")
 
     def enhance_video(
         self,
@@ -100,11 +121,23 @@ class CodeFormer:
         Returns:
             Path to enhanced video
         """
-        if not self._loaded:
-            self.load()
-
         fidelity = fidelity_weight or self.config.fidelity_weight
         blend = blend_ratio or 0.7
+
+        logger.info("=" * 50)
+        logger.info("CODEFORMER - Enhancing video")
+        logger.info("=" * 50)
+        logger.info(f"  Input: {video_path}")
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Fidelity weight: {fidelity}")
+        logger.info(f"  Blend ratio: {blend}")
+        logger.info(f"  Has aligned: {has_aligned}")
+        logger.info(f"  Time range: {start_time or 0}s - {end_time or 'end'}s")
+
+        start = time.time()
+
+        if not self._loaded:
+            self.load()
 
         # TODO: Implement actual enhancement
         # The flow is:
@@ -118,10 +151,14 @@ class CodeFormer:
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        logger.info(f"  Video: {width}x{height} @ {fps:.2f}fps, {frame_count} frames")
 
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
+        processed_frames = 0
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -139,11 +176,20 @@ class CodeFormer:
             # Blend with original
             result = cv2.addWeighted(frame, 1 - blend, enhanced, blend, 0)
             out.write(result)
+            processed_frames += 1
+
+            if processed_frames % 100 == 0:
+                logger.debug(f"  Processed {processed_frames}/{frame_count} frames")
 
         cap.release()
         out.release()
 
-        print(f"CodeFormer: Enhanced video at {output_path}")
+        elapsed = time.time() - start
+        logger.info(f"  Processed {processed_frames} frames")
+        logger.info(f"  Processing time: {elapsed:.2f}s ({processed_frames/elapsed:.1f} fps)")
+        logger.info(f"  Output saved to: {output_path}")
+        logger.info("CODEFORMER - Enhancement complete")
+
         return output_path
 
     def enhance_image(

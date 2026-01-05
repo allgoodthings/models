@@ -5,11 +5,15 @@ Handles blending processed face regions back into the original video
 with feathered masks and temporal consistency.
 """
 
+import logging
+import time
 import cv2
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict
 from concurrent.futures import ThreadPoolExecutor
+
+logger = logging.getLogger('lipsync.compositor')
 
 
 @dataclass
@@ -44,6 +48,7 @@ class FaceCompositor:
         """
         self.feather_radius = feather_radius
         self.boundary_blend_frames = boundary_blend_frames
+        logger.info(f"FaceCompositor initialized: feather_radius={feather_radius}, boundary_blend_frames={boundary_blend_frames}")
 
     def create_elliptical_mask(
         self,
@@ -226,7 +231,21 @@ class FaceCompositor:
         Returns:
             List of composited frames
         """
+        logger.info("=" * 50)
+        logger.info("COMPOSITOR - Compositing video frames")
+        logger.info("=" * 50)
+        logger.info(f"  Original frames: {len(original_frames)}")
+        logger.info(f"  Face regions: {len(face_regions)}")
+        logger.info(f"  Parallel: {parallel}")
+
+        if face_regions:
+            for i, region in enumerate(face_regions):
+                logger.info(f"  Region {i}: character={region.character_id}, bbox={region.bbox}, frames={region.start_frame}-{region.end_frame}")
+
+        start_time = time.time()
+
         if not face_regions:
+            logger.info("  No face regions, returning original frames")
             return original_frames
 
         result_frames = [f.copy() for f in original_frames]
@@ -260,6 +279,11 @@ class FaceCompositor:
         else:
             result_frames = [process_frame(i) for i in range(len(original_frames))]
 
+        elapsed = time.time() - start_time
+        logger.info(f"  Processed {len(result_frames)} frames")
+        logger.info(f"  Processing time: {elapsed:.2f}s ({len(result_frames)/elapsed:.1f} fps)")
+        logger.info("COMPOSITOR - Compositing complete")
+
         return result_frames
 
     def composite_video_from_paths(
@@ -279,11 +303,22 @@ class FaceCompositor:
         Returns:
             Path to output video
         """
+        logger.info("=" * 50)
+        logger.info("COMPOSITOR - Compositing video from paths")
+        logger.info("=" * 50)
+        logger.info(f"  Input: {original_path}")
+        logger.info(f"  Output: {output_path}")
+        logger.info(f"  Face regions: {len(face_regions)}")
+
+        start_time = time.time()
+
         cap = cv2.VideoCapture(original_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        logger.info(f"  Video: {width}x{height} @ {fps:.2f}fps, {total_frames} frames")
 
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
@@ -313,6 +348,12 @@ class FaceCompositor:
 
         cap.release()
         out.release()
+
+        elapsed = time.time() - start_time
+        logger.info(f"  Processed {total_frames} frames")
+        logger.info(f"  Processing time: {elapsed:.2f}s ({total_frames/elapsed:.1f} fps)")
+        logger.info(f"  Output saved to: {output_path}")
+        logger.info("COMPOSITOR - Compositing complete")
 
         return output_path
 
