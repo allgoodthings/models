@@ -3,9 +3,18 @@
 Download all model weights for the lip-sync pipeline.
 
 This script downloads models from HuggingFace:
-- MuseTalk (~4GB)
-- LivePortrait (~2GB)
-- CodeFormer (~1GB)
+- MuseTalk (~4GB) from TMElyralab/MuseTalk
+  - musetalkV15/musetalk.json
+  - musetalkV15/unet.pth
+- LivePortrait (~700MB) from KwaiVGI/LivePortrait
+  - liveportrait/base_models/*.pth
+  - liveportrait/retargeting_models/*.pth
+- CodeFormer (~350MB) from GitHub releases
+  - codeformer.pth
+  - facelib/*.pth
+- SD VAE (~335MB) from stabilityai/sd-vae-ft-mse
+  - config.json
+  - diffusion_pytorch_model.safetensors
 
 Usage:
     python scripts/download_models.py
@@ -19,7 +28,14 @@ from pathlib import Path
 
 
 def download_musetalk(target_dir: str) -> None:
-    """Download MuseTalk model weights."""
+    """
+    Download MuseTalk model weights from HuggingFace.
+
+    Downloads to: {target_dir}/musetalk/
+    Structure:
+    - musetalkV15/musetalk.json (config)
+    - musetalkV15/unet.pth (3.4GB weights)
+    """
     from huggingface_hub import snapshot_download
 
     print(f"Downloading MuseTalk to {target_dir}/musetalk...")
@@ -34,7 +50,19 @@ def download_musetalk(target_dir: str) -> None:
 
 
 def download_liveportrait(target_dir: str) -> None:
-    """Download LivePortrait model weights."""
+    """
+    Download LivePortrait model weights from HuggingFace.
+
+    Downloads to: {target_dir}/liveportrait/
+    Structure:
+    - liveportrait/base_models/appearance_feature_extractor.pth (3.39MB)
+    - liveportrait/base_models/motion_extractor.pth (113MB)
+    - liveportrait/base_models/spade_generator.pth (222MB)
+    - liveportrait/base_models/warping_module.pth (182MB)
+    - liveportrait/retargeting_models/stitching_retargeting_module.pth (2.39MB)
+    - liveportrait/landmark.onnx (115MB)
+    - insightface/models/buffalo_l/* (face detection)
+    """
     from huggingface_hub import snapshot_download
 
     print(f"Downloading LivePortrait to {target_dir}/liveportrait...")
@@ -42,15 +70,48 @@ def download_liveportrait(target_dir: str) -> None:
     snapshot_download(
         repo_id="KwaiVGI/LivePortrait",
         local_dir=os.path.join(target_dir, "liveportrait"),
-        ignore_patterns=["*.md", "*.txt", "*.git*", "docs/*"],
+        ignore_patterns=["*.md", "*.txt", "*.git*", "docs/*", "assets/*"],
     )
 
     print("LivePortrait downloaded successfully")
 
 
+def download_sd_vae(target_dir: str) -> None:
+    """
+    Download Stable Diffusion VAE from HuggingFace.
+
+    Downloads to: {target_dir}/musetalk/sd-vae-ft-mse/
+    Required by MuseTalk for encoding/decoding face images.
+    Structure:
+    - config.json
+    - diffusion_pytorch_model.safetensors (335MB)
+    """
+    from huggingface_hub import snapshot_download
+
+    print(f"Downloading SD VAE to {target_dir}/musetalk/sd-vae-ft-mse...")
+
+    vae_dir = os.path.join(target_dir, "musetalk", "sd-vae-ft-mse")
+    os.makedirs(vae_dir, exist_ok=True)
+
+    snapshot_download(
+        repo_id="stabilityai/sd-vae-ft-mse",
+        local_dir=vae_dir,
+        ignore_patterns=["*.md", "*.txt", "*.git*"],
+    )
+
+    print("SD VAE downloaded successfully")
+
+
 def download_codeformer(target_dir: str) -> None:
-    """Download CodeFormer model weights."""
-    from huggingface_hub import hf_hub_download
+    """
+    Download CodeFormer model weights from GitHub releases.
+
+    Downloads to: {target_dir}/codeformer/
+    Structure:
+    - codeformer.pth (~350MB)
+    - facelib/detection_Resnet50_Final.pth
+    - facelib/parsing_parsenet.pth
+    """
     import urllib.request
 
     print(f"Downloading CodeFormer to {target_dir}/codeformer...")
@@ -92,47 +153,43 @@ def download_codeformer(target_dir: str) -> None:
 
 def download_face_models(target_dir: str) -> None:
     """Download additional face detection models."""
-    from huggingface_hub import hf_hub_download
-
-    print(f"Downloading face models to {target_dir}/face...")
-
-    face_dir = os.path.join(target_dir, "face")
-    os.makedirs(face_dir, exist_ok=True)
-
-    # Download InsightFace models (used by some pipelines)
-    try:
-        hf_hub_download(
-            repo_id="deepinsight/insightface",
-            subfolder="models/buffalo_l",
-            filename="det_10g.onnx",
-            local_dir=face_dir,
-        )
-        print("InsightFace detection model downloaded")
-    except Exception as e:
-        print(f"Warning: Could not download InsightFace: {e}")
-
-    print("Face models downloaded successfully")
+    print(f"Note: InsightFace buffalo_l model will be auto-downloaded on first use")
+    print("Face models setup complete")
 
 
 def verify_downloads(target_dir: str) -> bool:
     """Verify that required models are present."""
-    required_files = [
-        "musetalk",
-        "liveportrait",
-        "codeformer/CodeFormer/codeformer.pth",
+    required_paths = [
+        # MuseTalk
+        ("musetalk/musetalkV15/musetalk.json", "MuseTalk config"),
+        ("musetalk/musetalkV15/unet.pth", "MuseTalk UNet weights"),
+        ("musetalk/sd-vae-ft-mse/config.json", "SD VAE config"),
+        # LivePortrait
+        ("liveportrait/liveportrait/base_models/appearance_feature_extractor.pth", "LivePortrait F"),
+        ("liveportrait/liveportrait/base_models/motion_extractor.pth", "LivePortrait M"),
+        ("liveportrait/liveportrait/base_models/spade_generator.pth", "LivePortrait G"),
+        ("liveportrait/liveportrait/base_models/warping_module.pth", "LivePortrait W"),
+        ("liveportrait/liveportrait/retargeting_models/stitching_retargeting_module.pth", "LivePortrait S"),
+        # CodeFormer
+        ("codeformer/codeformer.pth", "CodeFormer weights"),
     ]
 
     missing = []
-    for path in required_files:
+    for path, name in required_paths:
         full_path = os.path.join(target_dir, path)
         if not os.path.exists(full_path):
-            missing.append(path)
+            missing.append(f"{name}: {path}")
+        else:
+            size_mb = os.path.getsize(full_path) / (1024 * 1024)
+            print(f"  ✓ {name}: {size_mb:.1f} MB")
 
     if missing:
-        print(f"Warning: Missing files: {missing}")
+        print(f"\nWarning: Missing files:")
+        for m in missing:
+            print(f"  ✗ {m}")
         return False
 
-    print("All required models verified")
+    print("\nAll required models verified!")
     return True
 
 
@@ -141,8 +198,8 @@ def main():
     parser.add_argument(
         "--models-dir",
         type=str,
-        default="models",
-        help="Directory to save models (default: models)",
+        default="/app/models",
+        help="Directory to save models (default: /app/models)",
     )
     parser.add_argument(
         "--skip-musetalk",
@@ -158,6 +215,11 @@ def main():
         "--skip-codeformer",
         action="store_true",
         help="Skip CodeFormer download",
+    )
+    parser.add_argument(
+        "--skip-vae",
+        action="store_true",
+        help="Skip SD VAE download",
     )
     parser.add_argument(
         "--verify-only",
@@ -182,6 +244,10 @@ def main():
             download_musetalk(target_dir)
             print()
 
+        if not args.skip_vae:
+            download_sd_vae(target_dir)
+            print()
+
         if not args.skip_liveportrait:
             download_liveportrait(target_dir)
             print()
@@ -195,14 +261,16 @@ def main():
         print()
 
         print("=" * 50)
-        print("All models downloaded successfully!")
-        print(f"Total size: Check {target_dir}")
+        print("All models downloaded!")
         print("=" * 50)
+        print()
 
         verify_downloads(target_dir)
 
     except Exception as e:
         print(f"Error downloading models: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 

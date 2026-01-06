@@ -4,17 +4,30 @@ LivePortrait model wrapper for face neutralization.
 Uses the official KwaiVGI/LivePortrait package for inference.
 LivePortrait is used to neutralize mouth expressions before lip-sync.
 
-API Reference (verified from official repo):
-- src.live_portrait_pipeline.LivePortraitPipeline: Main orchestration class
-- src.live_portrait_wrapper.LivePortraitWrapper: Neural network wrapper with:
-  - extract_feature_3d(): Get appearance features from source
-  - get_kp_info(): Get keypoints including expression params
-  - warp_decode(): Generate output frame from features + keypoints
-  - retarget_lip(): Calculate lip delta for neutralization
-  - stitching(): Blend keypoints for seamless compositing
-- src.utils.cropper.Cropper: Face detection and cropping
-- src.config.inference_config.InferenceConfig: Model paths and flags
-- src.config.crop_config.CropConfig: Cropping parameters
+VERIFIED API (from official repo source code):
+
+Cropper.crop_source_image(image) returns dict with keys:
+- img_crop: cropped face image
+- img_crop_256x256: resized to 256x256
+- lmk_crop: landmarks in crop space
+- lmk_crop_256x256: landmarks scaled to 256x256
+- M_c2o: transformation matrix (crop to original)
+- pt_crop: crop points
+
+LivePortraitWrapper methods:
+- extract_feature_3d(img_tensor) -> feature_3d tensor
+- get_kp_info(img_tensor) -> dict with 'kp' key (BxNx3 keypoints)
+- warp_decode(feature_3d, kp_source, kp_driving) -> output tensor
+- retarget_lip(kp_source, lip_close_ratio) -> delta tensor
+  - kp_source: BxNx3 tensor
+  - lip_close_ratio: Bx2 tensor (combined source+driving ratios)
+  - returns: Bx(3*num_kp) delta to reshape and add to keypoints
+- calc_ratio(lmk_lst) -> (eye_ratios, lip_ratios) lists
+- calc_combined_lip_ratio(driving_lip_ratio, source_landmarks) -> Bx2 tensor
+
+calc_lip_close_ratio(landmarks) from retargeting_utils:
+- Calculates distance ratio between lip landmarks
+- Smaller value = more closed lips
 """
 
 import logging
@@ -39,7 +52,7 @@ if os.path.exists(LIVEPORTRAIT_PATH) and LIVEPORTRAIT_PATH not in sys.path:
 @dataclass
 class LivePortraitConfig:
     """Configuration for LivePortrait model."""
-    # Model weights directory (downloaded from HF)
+    # Model weights directory (downloaded from HF KwaiVGI/LivePortrait)
     model_dir: str = "/app/models/liveportrait"
     # LivePortrait repo path (cloned from GitHub)
     repo_path: str = "/app/LivePortrait"
@@ -56,8 +69,8 @@ class LivePortrait:
     Used in lip-sync pipeline to neutralize existing lip movements
     before applying new audio-driven lip sync with MuseTalk.
 
-    The key operation is setting lip_ratio=0 to create a neutral mouth
-    expression while preserving identity and other facial features.
+    For neutralization, we set the driving lip ratio to 0 (fully closed)
+    which causes retarget_lip() to produce a delta that closes the mouth.
     """
 
     def __init__(self, config: Optional[LivePortraitConfig] = None):
@@ -105,16 +118,20 @@ class LivePortrait:
             )
 
             # Override model paths if custom model_dir is specified
+            # HF structure: liveportrait/base_models/*.pth, liveportrait/retargeting_models/*.pth
             model_dir = Path(self.config.model_dir)
             if model_dir.exists():
-                # LivePortrait expects pretrained_weights structure
-                weights_dir = model_dir / "pretrained_weights"
-                if weights_dir.exists():
-                    inference_cfg.checkpoint_F = str(weights_dir / "liveportrait" / "base_models" / "appearance_feature_extractor.pth")
-                    inference_cfg.checkpoint_M = str(weights_dir / "liveportrait" / "base_models" / "motion_extractor.pth")
-                    inference_cfg.checkpoint_G = str(weights_dir / "liveportrait" / "base_models" / "spade_generator.pth")
-                    inference_cfg.checkpoint_W = str(weights_dir / "liveportrait" / "base_models" / "warping_module.pth")
-                    inference_cfg.checkpoint_S = str(weights_dir / "liveportrait" / "retargeting_models" / "stitching_retargeting_module.pth")
+                base_models = model_dir / "liveportrait" / "base_models"
+                retarget_models = model_dir / "liveportrait" / "retargeting_models"
+
+                if base_models.exists():
+                    inference_cfg.checkpoint_F = str(base_models / "appearance_feature_extractor.pth")
+                    inference_cfg.checkpoint_M = str(base_models / "motion_extractor.pth")
+                    inference_cfg.checkpoint_G = str(base_models / "spade_generator.pth")
+                    inference_cfg.checkpoint_W = str(base_models / "warping_module.pth")
+
+                if retarget_models.exists():
+                    inference_cfg.checkpoint_S = str(retarget_models / "stitching_retargeting_module.pth")
 
             # Create crop config
             crop_cfg = CropConfig(
@@ -195,6 +212,9 @@ class LivePortrait:
             self.load()
 
         try:
+            # Import retargeting utils for lip ratio calculation
+            from src.utils.retargeting_utils import calc_lip_close_ratio
+
             # Open video
             cap = cv2.VideoCapture(video_path)
             fps = cap.get(cv2.CAP_PROP_FPS)
@@ -244,7 +264,9 @@ class LivePortrait:
                 # Check if frame is in processing range
                 if start_frame <= frame_idx < end_frame:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    neutralized_rgb = self._process_frame(frame_rgb, source_info, lip_ratio)
+                    neutralized_rgb = self._process_frame(
+                        frame_rgb, source_info, lip_ratio, calc_lip_close_ratio
+                    )
                     neutralized_bgr = cv2.cvtColor(neutralized_rgb, cv2.COLOR_RGB2BGR)
                     out.write(neutralized_bgr)
                 else:
@@ -285,20 +307,29 @@ class LivePortrait:
 
         Returns dict with:
         - feature_3d: Appearance features from F network
-        - kp_source: Keypoint info from M network (includes expression)
+        - kp_source: Keypoint info from M network
         - crop_info: Cropping transformation for paste-back
+        - source_lmk: Source landmarks for lip ratio calculation
         """
         try:
             # Use cropper to detect and crop face
+            # Returns dict with: img_crop, img_crop_256x256, lmk_crop, lmk_crop_256x256, M_c2o, pt_crop
             crop_info = self.cropper.crop_source_image(frame_rgb)
 
-            if crop_info is None or 'img_crop_256x256' not in crop_info:
+            if crop_info is None:
                 logger.warning("No face detected by cropper")
                 return None
 
+            # Check for required keys
+            if 'img_crop_256x256' not in crop_info:
+                logger.warning("crop_source_image did not return img_crop_256x256")
+                return None
+
             img_crop = crop_info['img_crop_256x256']
+            source_lmk = crop_info.get('lmk_crop', None)
 
             # Convert to tensor [B, C, H, W]
+            # img_crop is RGB uint8, normalize to [0, 1]
             img_tensor = torch.from_numpy(img_crop).permute(2, 0, 1).float() / 255.0
             img_tensor = img_tensor.unsqueeze(0).to(self.device)
 
@@ -307,10 +338,10 @@ class LivePortrait:
 
             # Extract features
             with torch.no_grad():
-                # Get 3D appearance features from F network
+                # extract_feature_3d(img_tensor) -> feature_3d
                 feature_3d = self.live_portrait_wrapper.extract_feature_3d(img_tensor)
 
-                # Get keypoint info from M network (includes expression, pose, etc.)
+                # get_kp_info(img_tensor) -> dict with 'kp' (BxNx3)
                 kp_source = self.live_portrait_wrapper.get_kp_info(img_tensor)
 
             return {
@@ -318,6 +349,7 @@ class LivePortrait:
                 'kp_source': kp_source,
                 'crop_info': crop_info,
                 'source_tensor': img_tensor,
+                'source_lmk': source_lmk,
             }
 
         except Exception as e:
@@ -331,23 +363,28 @@ class LivePortrait:
         frame_rgb: np.ndarray,
         source_info: Dict[str, Any],
         lip_ratio: float,
+        calc_lip_close_ratio,
     ) -> np.ndarray:
         """
         Process a single frame with lip neutralization.
 
-        The key insight is that LivePortrait's retarget_lip() method
-        calculates a delta to apply to keypoints. With lip_ratio=0,
-        we neutralize the lip expression toward the source (neutral) pose.
+        For neutralization (lip_ratio=0):
+        1. Get driving frame landmarks
+        2. Calculate driving lip close ratio
+        3. Set combined ratio to (source_ratio, 0) for full closure
+        4. Call retarget_lip to get delta
+        5. Apply delta to driving keypoints
+        6. Generate output via warp_decode
         """
         try:
             # Crop driving frame
             crop_info = self.cropper.crop_source_image(frame_rgb)
 
             if crop_info is None or 'img_crop_256x256' not in crop_info:
-                # No face detected, return original
                 return frame_rgb
 
             img_crop = crop_info['img_crop_256x256']
+            driving_lmk = crop_info.get('lmk_crop', None)
 
             # Convert to tensor
             img_tensor = torch.from_numpy(img_crop).permute(2, 0, 1).float() / 255.0
@@ -357,39 +394,66 @@ class LivePortrait:
                 img_tensor = img_tensor.half()
 
             with torch.no_grad():
-                # Get driving keypoints (current frame's expression)
+                # Get driving keypoints
                 kp_driving = self.live_portrait_wrapper.get_kp_info(img_tensor)
-
-                # Get source keypoints (neutral reference)
                 kp_source = source_info['kp_source']
 
-                # Apply lip retargeting
-                # lip_ratio=0 means fully neutral, lip_ratio=1 means original
-                if lip_ratio < 1.0 and hasattr(self.live_portrait_wrapper, 'retarget_lip'):
-                    # Calculate lip delta for neutralization
-                    # The retarget_lip method modifies expression to reduce lip movement
-                    delta = self.live_portrait_wrapper.retarget_lip(
-                        kp_source,
-                        kp_driving,
-                        lip_ratio,
-                    )
+                # For lip neutralization, we need to use retarget_lip
+                # retarget_lip(kp_source, lip_close_ratio) where lip_close_ratio is Bx2
+                # lip_close_ratio = [source_lip_ratio, driving_lip_ratio]
 
-                    # Apply delta to driving keypoints
-                    kp_neutralized = self._apply_lip_delta(kp_driving, delta, lip_ratio)
+                if lip_ratio < 1.0 and hasattr(self.live_portrait_wrapper, 'retarget_lip'):
+                    # Calculate lip ratios from landmarks if available
+                    source_lmk = source_info.get('source_lmk')
+
+                    if source_lmk is not None and driving_lmk is not None:
+                        # calc_lip_close_ratio expects (N, 2) or (1, N, 2) landmarks
+                        # Returns a scalar or array
+                        source_lip_ratio = calc_lip_close_ratio(source_lmk[None])
+                        driving_lip_ratio = calc_lip_close_ratio(driving_lmk[None])
+
+                        # For neutralization, interpolate driving ratio toward 0 (closed)
+                        # lip_ratio=0 means fully closed, lip_ratio=1 means original
+                        target_driving_ratio = driving_lip_ratio * lip_ratio
+
+                        # Create combined ratio tensor [source_ratio, driving_ratio]
+                        combined_lip_ratio = torch.tensor(
+                            [[float(source_lip_ratio), float(target_driving_ratio)]],
+                            device=self.device,
+                            dtype=img_tensor.dtype,
+                        )
+
+                        # Get keypoints tensor (BxNx3)
+                        x_s = kp_source['kp']
+
+                        # retarget_lip(kp_source, lip_close_ratio) -> delta Bx(3*N)
+                        lip_delta = self.live_portrait_wrapper.retarget_lip(x_s, combined_lip_ratio)
+
+                        # Reshape delta to BxNx3 and add to driving keypoints
+                        B, N, _ = kp_driving['kp'].shape
+                        lip_delta_reshaped = lip_delta.view(B, N, 3)
+
+                        # Apply delta to driving keypoints
+                        kp_driving_modified = {k: v.clone() if isinstance(v, torch.Tensor) else v
+                                               for k, v in kp_driving.items()}
+                        kp_driving_modified['kp'] = kp_driving['kp'] + lip_delta_reshaped
+                    else:
+                        # Fallback: simple interpolation of keypoints
+                        kp_driving_modified = self._interpolate_keypoints(kp_source, kp_driving, lip_ratio)
                 else:
-                    # Manual interpolation if retarget_lip not available
-                    kp_neutralized = self._interpolate_keypoints(kp_source, kp_driving, lip_ratio)
+                    kp_driving_modified = kp_driving
 
                 # Generate output using warp_decode
-                # This warps the source appearance using the neutralized keypoints
+                # warp_decode(feature_3d, kp_source, kp_driving) -> output tensor
                 output = self.live_portrait_wrapper.warp_decode(
                     source_info['feature_3d'],
                     kp_source,
-                    kp_neutralized,
+                    kp_driving_modified,
                 )
 
-                # Convert output tensor to numpy
-                out_np = output.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                # Convert output tensor to numpy RGB
+                # Output is [B, C, H, W] in [0, 1] range
+                out_np = output.squeeze(0).permute(1, 2, 0).cpu().float().numpy()
                 out_np = (out_np * 255).clip(0, 255).astype(np.uint8)
 
             # Paste back into original frame
@@ -398,27 +462,9 @@ class LivePortrait:
 
         except Exception as e:
             logger.debug(f"Frame processing error: {e}")
+            import traceback
+            traceback.print_exc()
             return frame_rgb
-
-    def _apply_lip_delta(
-        self,
-        kp_driving: Dict[str, torch.Tensor],
-        delta: torch.Tensor,
-        lip_ratio: float,
-    ) -> Dict[str, torch.Tensor]:
-        """Apply lip retargeting delta to driving keypoints."""
-        kp_result = {}
-
-        for key, value in kp_driving.items():
-            if key == 'kp' and delta is not None:
-                # Apply the lip delta scaled by (1 - lip_ratio)
-                # At lip_ratio=0, full delta is applied (neutral lips)
-                # At lip_ratio=1, no delta (original lips)
-                kp_result[key] = value + delta * (1.0 - lip_ratio)
-            else:
-                kp_result[key] = value
-
-        return kp_result
 
     def _interpolate_keypoints(
         self,
@@ -427,36 +473,26 @@ class LivePortrait:
         lip_ratio: float,
     ) -> Dict[str, torch.Tensor]:
         """
-        Interpolate between source and driving keypoints.
+        Fallback: Interpolate between source and driving keypoints.
 
-        Used as fallback if retarget_lip is not available.
         For lip neutralization, we blend toward source expression.
         """
         kp_result = {}
 
-        # Lip-related keypoint indices in LivePortrait
-        # These correspond to mouth region in the 68-point or custom keypoint format
-        LIP_INDICES = [6, 12, 14, 17, 19, 20]  # From LivePortrait's lip_array
+        # Lip-related keypoint indices in LivePortrait (from lip_array in config)
+        LIP_INDICES = [6, 12, 14, 17, 19, 20]
 
         for key, value in kp_driving.items():
-            if key in kp_source:
+            if key in kp_source and isinstance(value, torch.Tensor):
                 source_value = kp_source[key]
 
-                if isinstance(value, torch.Tensor) and isinstance(source_value, torch.Tensor):
-                    if key == 'exp' or key == 'expression':
-                        # For expression params, interpolate toward source (neutral)
-                        kp_result[key] = (1 - lip_ratio) * source_value + lip_ratio * value
-                    elif key == 'kp':
-                        # For keypoints, selectively interpolate lip region
-                        result = value.clone()
-                        # Only interpolate lip indices
-                        for idx in LIP_INDICES:
-                            if idx < result.shape[1]:
-                                result[:, idx] = (1 - lip_ratio) * source_value[:, idx] + lip_ratio * value[:, idx]
-                        kp_result[key] = result
-                    else:
-                        # Keep other params from driving (pose, etc.)
-                        kp_result[key] = value
+                if key == 'kp' and isinstance(source_value, torch.Tensor):
+                    # For keypoints, selectively interpolate lip region
+                    result = value.clone()
+                    for idx in LIP_INDICES:
+                        if idx < result.shape[1]:
+                            result[:, idx] = (1 - lip_ratio) * source_value[:, idx] + lip_ratio * value[:, idx]
+                    kp_result[key] = result
                 else:
                     kp_result[key] = value
             else:
@@ -472,18 +508,14 @@ class LivePortrait:
     ) -> np.ndarray:
         """Paste processed face back into frame using crop transformation."""
         try:
-            # Get inverse transformation matrix
+            # Get inverse transformation matrix M_c2o (crop to original)
             if 'M_c2o' in crop_info:
                 M_c2o = crop_info['M_c2o']
                 h, w = frame.shape[:2]
 
-                # Resize face to crop size (typically 256x256 or 512x512)
-                dsize = crop_info.get('dsize', 256)
-                face_resized = cv2.resize(face, (dsize, dsize))
-
-                # Warp face back to original coordinates
+                # Face is 256x256, warp to original coordinates
                 face_warped = cv2.warpAffine(
-                    face_resized,
+                    face,
                     M_c2o[:2],
                     (w, h),
                     borderMode=cv2.BORDER_CONSTANT,
@@ -491,7 +523,7 @@ class LivePortrait:
                 )
 
                 # Create soft mask for blending
-                mask = np.ones((dsize, dsize), dtype=np.float32)
+                mask = np.ones((256, 256), dtype=np.float32)
                 mask_warped = cv2.warpAffine(
                     mask,
                     M_c2o[:2],
@@ -499,8 +531,8 @@ class LivePortrait:
                     borderMode=cv2.BORDER_CONSTANT,
                 )
 
-                # Feather the mask edges
-                kernel_size = int(0.05 * dsize) * 2 + 1
+                # Feather the mask edges for smooth blending
+                kernel_size = 21
                 mask_warped = cv2.GaussianBlur(mask_warped, (kernel_size, kernel_size), 0)
                 mask_warped = mask_warped[:, :, np.newaxis]
 
@@ -508,18 +540,17 @@ class LivePortrait:
                 result = frame.astype(np.float32) * (1 - mask_warped) + face_warped.astype(np.float32) * mask_warped
                 return result.astype(np.uint8)
 
-            else:
-                # Fallback: simple paste using bbox
-                if 'pt_crop' in crop_info:
-                    x1, y1, x2, y2 = crop_info['pt_crop']
-                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                    h, w = y2 - y1, x2 - x1
-                    face_resized = cv2.resize(face, (w, h))
-                    result = frame.copy()
-                    result[y1:y2, x1:x2] = face_resized
-                    return result
+            elif 'pt_crop' in crop_info:
+                # Fallback: simple paste using crop points
+                x1, y1, x2, y2 = crop_info['pt_crop']
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                crop_h, crop_w = y2 - y1, x2 - x1
+                face_resized = cv2.resize(face, (crop_w, crop_h))
+                result = frame.copy()
+                result[y1:y2, x1:x2] = face_resized
+                return result
 
-                return frame
+            return frame
 
         except Exception as e:
             logger.debug(f"Paste back error: {e}")
@@ -537,6 +568,8 @@ def download_liveportrait_models(target_dir: str = "/app/models/liveportrait") -
     print(f"Downloading LivePortrait models to {target_dir}...")
     os.makedirs(target_dir, exist_ok=True)
 
+    # Download from KwaiVGI/LivePortrait
+    # Structure: liveportrait/base_models/*.pth, liveportrait/retargeting_models/*.pth
     snapshot_download(
         repo_id="KwaiVGI/LivePortrait",
         local_dir=target_dir,
