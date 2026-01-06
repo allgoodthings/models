@@ -3,23 +3,104 @@
  * Test script for the lip-sync API.
  *
  * Usage:
- *   node test-api.mjs --video input.mp4 --audio speech.wav --output result.mp4 --bbox 100,50,200,250
- *   node test-api.mjs --video input.mp4 --audio speech.wav --config faces.json --output result.mp4
+ *   node test-api.mjs --video input.mp4 --audio speech.wav --auto
+ *   node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --auto
+ *   node test-api.mjs --video input.mp4 --audio speech.wav --bbox 100,50,200,250 --end 5000
+ *   node test-api.mjs --video input.mp4 --audio speech.wav --config faces.json
  *
  * Options:
- *   --video      Input video file (required)
- *   --audio      Audio file for lip-sync (required)
+ *   --video      Input video file or URL (required)
+ *   --audio      Audio file or URL for lip-sync (required)
  *   --output     Output video file (default: output.mp4)
- *   --bbox       Face bounding box as x,y,w,h (for single face)
+ *   --auto       Auto-detect faces using Qwen-VL (requires OPENROUTER_API_KEY on server)
+ *   --bbox       Face bounding box as x,y,w,h (for single face, alternative to --auto)
  *   --config     JSON file with face configuration (for multi-face)
  *   --start      Start time in ms (default: 0)
- *   --end        End time in ms (default: video duration)
+ *   --end        End time in ms (default: video duration or 10000 for --auto)
  *   --api        API base URL (default: http://localhost:8000)
  *   --no-enhance Disable CodeFormer enhancement
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { basename } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from 'fs';
+import { basename, join } from 'path';
+import { tmpdir } from 'os';
+import { execSync } from 'child_process';
+
+// Check if a string is a URL
+function isUrl(str) {
+  return str.startsWith('http://') || str.startsWith('https://');
+}
+
+// Download a file from URL
+async function downloadFile(url, destPath) {
+  console.log(`  Downloading: ${url}`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download ${url}: ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  writeFileSync(destPath, buffer);
+  console.log(`  Downloaded: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+  return destPath;
+}
+
+// Get filename from URL
+function getFilenameFromUrl(url) {
+  const urlObj = new URL(url);
+  const pathParts = urlObj.pathname.split('/');
+  return pathParts[pathParts.length - 1] || 'file';
+}
+
+// Extract a frame from video using ffmpeg
+function extractFrame(videoPath, outputPath, timeSeconds = 0) {
+  console.log(`  Extracting frame at ${timeSeconds}s...`);
+  try {
+    execSync(
+      `ffmpeg -y -ss ${timeSeconds} -i "${videoPath}" -vframes 1 -f image2 "${outputPath}"`,
+      { stdio: 'pipe' }
+    );
+    return true;
+  } catch (err) {
+    console.error('  Failed to extract frame with ffmpeg');
+    return false;
+  }
+}
+
+// Detect faces using the API
+async function detectFaces(apiBase, framePath) {
+  console.log('Detecting faces with Qwen-VL...');
+
+  const frameBuffer = readFileSync(framePath);
+  const formData = new FormData();
+  formData.append('frame', new Blob([frameBuffer]), 'frame.jpg');
+
+  // Use empty characters list to detect all faces
+  formData.append('request', JSON.stringify({
+    characters: [
+      { id: 'person', name: 'Person', description: 'Any person visible in the frame' }
+    ]
+  }));
+
+  const response = await fetch(`${apiBase}/detect-faces`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Face detection failed: ${response.status} - ${errorText}`);
+  }
+
+  const result = await response.json();
+  console.log(`  Frame size: ${result.frame_width}x${result.frame_height}`);
+  console.log(`  Detected ${result.faces.length} face(s)`);
+
+  for (const face of result.faces) {
+    console.log(`    - ${face.character_id}: bbox=${JSON.stringify(face.bbox)}, confidence=${face.confidence.toFixed(2)}`);
+  }
+
+  return result;
+}
 
 // Parse command line arguments
 function parseArgs() {
@@ -28,6 +109,7 @@ function parseArgs() {
     video: null,
     audio: null,
     output: 'output.mp4',
+    auto: false,
     bbox: null,
     config: null,
     start: 0,
@@ -63,6 +145,9 @@ function parseArgs() {
       case '--api':
         opts.api = args[++i];
         break;
+      case '--auto':
+        opts.auto = true;
+        break;
       case '--no-enhance':
         opts.enhance = false;
         break;
@@ -72,17 +157,20 @@ function parseArgs() {
 Lip-Sync API Test Script
 
 Usage:
-  node test-api.mjs --video input.mp4 --audio speech.wav --bbox 100,50,200,250
+  node test-api.mjs --video input.mp4 --audio speech.wav --auto
+  node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --auto
+  node test-api.mjs --video input.mp4 --audio speech.wav --bbox 100,50,200,250 --end 5000
   node test-api.mjs --video input.mp4 --audio speech.wav --config faces.json
 
 Options:
-  --video      Input video file (required)
-  --audio      Audio file for lip-sync (required)
+  --video      Input video file or URL (required)
+  --audio      Audio file or URL for lip-sync (required)
   --output     Output video file (default: output.mp4)
-  --bbox       Face bounding box as x,y,w,h (for single face)
+  --auto       Auto-detect faces using Qwen-VL (recommended!)
+  --bbox       Face bounding box as x,y,w,h (manual, alternative to --auto)
   --config     JSON file with face configuration (for multi-face)
   --start      Start time in ms (default: 0)
-  --end        End time in ms (required if no --config)
+  --end        End time in ms (default: 10000 for --auto)
   --api        API base URL (default: http://localhost:8000)
   --no-enhance Disable CodeFormer enhancement
 
@@ -102,7 +190,7 @@ Example faces.json:
 }
 
 // Build the request configuration
-function buildRequestConfig(opts) {
+function buildRequestConfig(opts, detectedFaces = null) {
   // If config file provided, use it
   if (opts.config) {
     if (!existsSync(opts.config)) {
@@ -116,9 +204,24 @@ function buildRequestConfig(opts) {
     };
   }
 
+  // If auto-detected faces provided
+  if (detectedFaces && detectedFaces.length > 0) {
+    const endTime = opts.end ?? 10000; // Default 10 seconds for auto mode
+    return {
+      faces: detectedFaces.map((face, i) => ({
+        character_id: face.character_id || `face_${i + 1}`,
+        bbox: face.bbox,
+        start_time_ms: opts.start,
+        end_time_ms: endTime,
+      })),
+      enhance_quality: opts.enhance,
+      fidelity_weight: 0.7,
+    };
+  }
+
   // Otherwise build from bbox
   if (!opts.bbox) {
-    throw new Error('Either --bbox or --config is required');
+    throw new Error('Either --auto, --bbox, or --config is required');
   }
 
   const bboxParts = opts.bbox.split(',').map(n => parseInt(n.trim(), 10));
@@ -156,69 +259,131 @@ async function main() {
     process.exit(1);
   }
 
-  // Check files exist
-  if (!existsSync(opts.video)) {
-    console.error(`Error: Video file not found: ${opts.video}`);
-    process.exit(1);
-  }
-  if (!existsSync(opts.audio)) {
-    console.error(`Error: Audio file not found: ${opts.audio}`);
-    process.exit(1);
-  }
+  // Create temp directory for downloads
+  let tempDir = null;
+  let videoPath = opts.video;
+  let audioPath = opts.audio;
+  let videoFilename = basename(opts.video);
+  let audioFilename = basename(opts.audio);
 
-  // Build request config
-  let requestConfig;
   try {
-    requestConfig = buildRequestConfig(opts);
-  } catch (err) {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-  }
+    // Download files if URLs provided
+    if (isUrl(opts.video) || isUrl(opts.audio)) {
+      tempDir = mkdtempSync(join(tmpdir(), 'lipsync-test-'));
+      console.log('Downloading files...');
 
-  console.log('Lip-Sync API Test');
-  console.log('=================');
-  console.log(`API:    ${opts.api}`);
-  console.log(`Video:  ${opts.video}`);
-  console.log(`Audio:  ${opts.audio}`);
-  console.log(`Output: ${opts.output}`);
-  console.log(`Faces:  ${requestConfig.faces.length}`);
-  console.log('');
+      if (isUrl(opts.video)) {
+        videoFilename = getFilenameFromUrl(opts.video);
+        videoPath = join(tempDir, videoFilename);
+        await downloadFile(opts.video, videoPath);
+      }
 
-  // Check API health first
-  console.log('Checking API health...');
-  try {
-    const healthRes = await fetch(`${opts.api}/health`);
-    const health = await healthRes.json();
-    console.log(`  Status: ${health.status}`);
-    console.log(`  Models downloaded: ${health.models_downloaded}`);
-    console.log(`  Models loaded: ${health.models_loaded}`);
-    console.log(`  GPU: ${health.gpu_available ? `${health.gpu_name} (${health.gpu_memory_gb}GB)` : 'Not available'}`);
+      if (isUrl(opts.audio)) {
+        audioFilename = getFilenameFromUrl(opts.audio);
+        audioPath = join(tempDir, audioFilename);
+        await downloadFile(opts.audio, audioPath);
+      }
+      console.log('');
+    }
+
+    // Check files exist
+    if (!existsSync(videoPath)) {
+      console.error(`Error: Video file not found: ${videoPath}`);
+      process.exit(1);
+    }
+    if (!existsSync(audioPath)) {
+      console.error(`Error: Audio file not found: ${audioPath}`);
+      process.exit(1);
+    }
+
+    console.log('Lip-Sync API Test');
+    console.log('=================');
+    console.log(`API:    ${opts.api}`);
+    console.log(`Video:  ${opts.video}`);
+    console.log(`Audio:  ${opts.audio}`);
+    console.log(`Output: ${opts.output}`);
+    console.log(`Mode:   ${opts.auto ? 'Auto-detect' : opts.config ? 'Config file' : 'Manual bbox'}`);
     console.log('');
-  } catch (err) {
-    console.error(`Error: Cannot connect to API at ${opts.api}`);
-    console.error(`  ${err.message}`);
-    process.exit(1);
-  }
 
-  // Read files
-  console.log('Reading input files...');
-  const videoBuffer = readFileSync(opts.video);
-  const audioBuffer = readFileSync(opts.audio);
+    // Check API health first
+    console.log('Checking API health...');
+    try {
+      const healthRes = await fetch(`${opts.api}/health`);
+      const health = await healthRes.json();
+      console.log(`  Status: ${health.status}`);
+      console.log(`  Models downloaded: ${health.models_downloaded}`);
+      console.log(`  Models loaded: ${health.models_loaded}`);
+      console.log(`  GPU: ${health.gpu_available ? `${health.gpu_name} (${health.gpu_memory_gb}GB)` : 'Not available'}`);
+      console.log('');
+    } catch (err) {
+      console.error(`Error: Cannot connect to API at ${opts.api}`);
+      console.error(`  ${err.message}`);
+      process.exit(1);
+    }
 
-  // Build form data
-  const formData = new FormData();
-  formData.append('video', new Blob([videoBuffer]), basename(opts.video));
-  formData.append('audio', new Blob([audioBuffer]), basename(opts.audio));
-  formData.append('request', JSON.stringify(requestConfig));
+    // Auto-detect faces if requested
+    let detectedFaces = null;
+    if (opts.auto) {
+      // Extract a frame from the video
+      const framePath = join(tempDir || mkdtempSync(join(tmpdir(), 'lipsync-frame-')), 'frame.jpg');
+      if (!tempDir) {
+        tempDir = framePath.replace('/frame.jpg', '');
+      }
 
-  // Make request
-  console.log('Sending request to API...');
-  console.log(`  Faces: ${JSON.stringify(requestConfig.faces.map(f => f.character_id))}`);
-  console.log('');
+      if (!extractFrame(videoPath, framePath, 0.5)) {
+        console.error('Error: Could not extract frame from video (is ffmpeg installed?)');
+        process.exit(1);
+      }
 
-  const startTime = Date.now();
+      // Detect faces
+      try {
+        const detection = await detectFaces(opts.api, framePath);
+        detectedFaces = detection.faces;
 
-  try {
+        if (detectedFaces.length === 0) {
+          console.error('Error: No faces detected in the video');
+          process.exit(1);
+        }
+      } catch (err) {
+        console.error(`Error detecting faces: ${err.message}`);
+        process.exit(1);
+      }
+      console.log('');
+    }
+
+    // Build request config
+    let requestConfig;
+    try {
+      requestConfig = buildRequestConfig(opts, detectedFaces);
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+
+    console.log(`Faces:  ${requestConfig.faces.length}`);
+    for (const face of requestConfig.faces) {
+      console.log(`  - ${face.character_id}: bbox=${JSON.stringify(face.bbox)}, ${face.start_time_ms}ms-${face.end_time_ms}ms`);
+    }
+    console.log('');
+
+    // Read files
+    console.log('Reading input files...');
+    const videoBuffer = readFileSync(videoPath);
+    const audioBuffer = readFileSync(audioPath);
+
+    // Build form data
+    const formData = new FormData();
+    formData.append('video', new Blob([videoBuffer]), videoFilename);
+    formData.append('audio', new Blob([audioBuffer]), audioFilename);
+    formData.append('request', JSON.stringify(requestConfig));
+
+    // Make request
+    console.log('Sending request to API...');
+    console.log(`  Faces: ${JSON.stringify(requestConfig.faces.map(f => f.character_id))}`);
+    console.log('');
+
+    const startTime = Date.now();
+
     const response = await fetch(`${opts.api}/lipsync`, {
       method: 'POST',
       body: formData,
@@ -250,6 +415,15 @@ async function main() {
   } catch (err) {
     console.error('Error:', err.message);
     process.exit(1);
+  } finally {
+    // Cleanup temp directory
+    if (tempDir) {
+      try {
+        rmSync(tempDir, { recursive: true });
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
   }
 }
 
