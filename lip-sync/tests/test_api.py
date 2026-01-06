@@ -12,6 +12,9 @@ import json
 import os
 import sys
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,7 +34,223 @@ pytestmark = pytest.mark.skipif(
     reason=f"Missing dependencies for integration tests: {MISSING_DEP if not HAS_DEPS else ''}"
 )
 
-from conftest import MockFaceAnalysisResult, MockInsightFaceDetector, MockLipSyncPipeline
+
+# =============================================================================
+# Mock classes (duplicated from conftest to avoid import issues in CI)
+# =============================================================================
+
+
+@dataclass
+class MockFaceAnalysisResult:
+    """Mock result from InsightFace face analysis."""
+    character_id: str
+    bbox: Tuple[int, int, int, int]
+    confidence: float
+    head_pose: Tuple[float, float, float]
+    syncable: bool
+    sync_quality: float
+    skip_reason: Optional[str] = None
+
+
+class MockInsightFaceDetector:
+    """Mock InsightFace detector that returns predefined face data."""
+
+    def __init__(self, *args, **kwargs):
+        self.is_loaded = False
+        self._mock_faces: List[MockFaceAnalysisResult] = []
+        self._references: Dict[str, Any] = {}
+
+    def load(self):
+        self.is_loaded = True
+
+    def unload(self):
+        self.is_loaded = False
+
+    def load_reference(self, character_id: str, image: Any) -> bool:
+        self._references[character_id] = "mock_embedding"
+        return True
+
+    def clear_references(self):
+        self._references.clear()
+
+    def detect_faces(
+        self, frame: Any, similarity_threshold: float = 0.5
+    ) -> List[MockFaceAnalysisResult]:
+        """Return mock faces. Can be configured via set_mock_faces()."""
+        if not self._mock_faces:
+            return [
+                MockFaceAnalysisResult(
+                    character_id="face_1",
+                    bbox=(100, 50, 200, 250),
+                    confidence=0.95,
+                    head_pose=(5.0, -10.0, 2.0),
+                    syncable=True,
+                    sync_quality=0.9,
+                )
+            ]
+        return self._mock_faces
+
+    def set_mock_faces(self, faces: List[MockFaceAnalysisResult]):
+        """Configure faces to return from detect_faces()."""
+        self._mock_faces = faces
+
+
+class MockLipSyncPipeline:
+    """Mock pipeline that creates a simple output video without inference."""
+
+    def __init__(self, config=None):
+        self.config = config or MagicMock()
+        self._models_loaded = False
+
+    def load_models(self):
+        self._models_loaded = True
+
+    def unload_models(self):
+        self._models_loaded = False
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._models_loaded
+
+    def process_single_face(
+        self,
+        video_path: str,
+        audio_path: str,
+        output_path: str,
+        target_bbox: Optional[Tuple[int, int, int, int]] = None,
+    ) -> str:
+        """Create a minimal output video (copy input with slight modification)."""
+        import shutil
+        shutil.copy(video_path, output_path)
+        return output_path
+
+    def process_multi_face(
+        self,
+        video_path: str,
+        face_jobs: list,
+        output_path: str,
+    ) -> str:
+        """Create a minimal output video for multi-face."""
+        import shutil
+        shutil.copy(video_path, output_path)
+        return output_path
+
+
+# =============================================================================
+# Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def temp_dir():
+    """Provide a temporary directory that's cleaned up after tests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield tmpdir
+
+
+@pytest.fixture
+def sample_video_path(temp_dir):
+    """Create a minimal test video file."""
+    import subprocess
+
+    video_path = os.path.join(temp_dir, "test_video.mp4")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", "color=c=blue:s=320x240:d=2",
+        "-f", "lavfi",
+        "-i", "sine=frequency=440:duration=2",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-c:a", "aac",
+        video_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        pytest.skip("ffmpeg not available for test video generation")
+
+    return video_path
+
+
+@pytest.fixture
+def sample_audio_path(temp_dir):
+    """Create a minimal test audio file."""
+    import subprocess
+
+    audio_path = os.path.join(temp_dir, "test_audio.wav")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", "sine=frequency=440:duration=2",
+        audio_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        pytest.skip("ffmpeg not available for test audio generation")
+
+    return audio_path
+
+
+@pytest.fixture
+def sample_image_path(temp_dir):
+    """Create a minimal test image file."""
+    import subprocess
+
+    image_path = os.path.join(temp_dir, "test_image.jpg")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", "color=c=red:s=200x200:d=1",
+        "-frames:v", "1",
+        image_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        pytest.skip("ffmpeg not available for test image generation")
+
+    return image_path
+
+
+@pytest.fixture
+def app_with_mocks():
+    """
+    Create FastAPI app with mocked models for integration testing.
+
+    This fixture requires heavy dependencies (fastapi, numpy, etc).
+    Tests using this fixture should be marked appropriately.
+    """
+    try:
+        from lipsync.server import main as server_main
+    except ImportError as e:
+        pytest.skip(f"Could not import server module: {e}")
+
+    # Store original values
+    original_pipeline = server_main.pipeline
+    original_detector = server_main.face_detector
+
+    # Replace with mocks
+    mock_det = MockInsightFaceDetector()
+    mock_det.load()
+    mock_pipe = MockLipSyncPipeline()
+    mock_pipe.load_models()
+
+    server_main.face_detector = mock_det
+    server_main.pipeline = mock_pipe
+
+    # Create test client
+    client = TestClient(server_main.app)
+
+    yield client, mock_det, mock_pipe
+
+    # Restore originals
+    server_main.pipeline = original_pipeline
+    server_main.face_detector = original_detector
 
 
 class TestHealthEndpoint:
