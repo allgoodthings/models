@@ -51,35 +51,41 @@ def download_liveportrait(target_dir: str) -> None:
 def download_codeformer(target_dir: str) -> None:
     """Download CodeFormer model weights."""
     from huggingface_hub import hf_hub_download
+    import urllib.request
 
     print(f"Downloading CodeFormer to {target_dir}/codeformer...")
 
     codeformer_dir = os.path.join(target_dir, "codeformer")
     os.makedirs(codeformer_dir, exist_ok=True)
 
-    # Download main CodeFormer model (from HF Space, not model repo)
-    hf_hub_download(
-        repo_id="sczhou/CodeFormer",
-        repo_type="space",
-        filename="CodeFormer/codeformer.pth",
-        local_dir=codeformer_dir,
-    )
+    # Download main CodeFormer model from GitHub releases (official source)
+    codeformer_path = os.path.join(codeformer_dir, "codeformer.pth")
+    if not os.path.exists(codeformer_path):
+        print("  Downloading codeformer.pth from GitHub releases...")
+        urllib.request.urlretrieve(
+            "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth",
+            codeformer_path,
+        )
 
-    # Download face detection model (RetinaFace)
-    hf_hub_download(
-        repo_id="sczhou/CodeFormer",
-        repo_type="space",
-        filename="facelib/detection_Resnet50_Final.pth",
-        local_dir=codeformer_dir,
-    )
+    # Download facelib models from GitHub releases
+    facelib_dir = os.path.join(codeformer_dir, "facelib")
+    os.makedirs(facelib_dir, exist_ok=True)
 
-    # Download face parsing model
-    hf_hub_download(
-        repo_id="sczhou/CodeFormer",
-        repo_type="space",
-        filename="facelib/parsing_parsenet.pth",
-        local_dir=codeformer_dir,
-    )
+    detection_path = os.path.join(facelib_dir, "detection_Resnet50_Final.pth")
+    if not os.path.exists(detection_path):
+        print("  Downloading detection_Resnet50_Final.pth...")
+        urllib.request.urlretrieve(
+            "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/detection_Resnet50_Final.pth",
+            detection_path,
+        )
+
+    parsing_path = os.path.join(facelib_dir, "parsing_parsenet.pth")
+    if not os.path.exists(parsing_path):
+        print("  Downloading parsing_parsenet.pth...")
+        urllib.request.urlretrieve(
+            "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/parsing_parsenet.pth",
+            parsing_path,
+        )
 
     print("CodeFormer downloaded successfully")
 
