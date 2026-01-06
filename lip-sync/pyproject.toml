@@ -85,5 +85,3 @@ markers = [
     "cpu: marks tests that run full pipeline on CPU",
 ]
 
-[project.scripts]
-test-cpu = "scripts.test-cpu-validation:main"
