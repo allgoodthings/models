@@ -309,11 +309,22 @@ async def lifespan(app: FastAPI):
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         logger.info(f"GPU: {gpu_name} ({gpu_memory:.1f}GB)")
 
+    skip_download = os.environ.get("SKIP_MODEL_DOWNLOAD", "").lower() in ("true", "1", "yes")
+    skip_load = os.environ.get("PRELOAD_MODELS", "true").lower() in ("false", "0", "no")
+
+    if skip_load:
+        logger.info("PRELOAD_MODELS=false - Skipping model loading (health check only mode)")
+        yield
+        return
+
     logger.info("-" * 40)
     logger.info("Checking model weights...")
     if not check_models_exist():
-        logger.info(f"Models not found at {MODELS_DIR}")
-        download_models()
+        if skip_download:
+            logger.warning(f"Models not found at {MODELS_DIR} but SKIP_MODEL_DOWNLOAD=true")
+        else:
+            logger.info(f"Models not found at {MODELS_DIR}")
+            download_models()
     else:
         logger.info(f"Models found at {MODELS_DIR}")
 

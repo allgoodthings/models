@@ -260,8 +260,12 @@ jobs:
 
       - name: Test image starts
         run: |
-          # Start container without GPU (will fail model loading but server should start)
-          docker run -d --name lipsync-test -p 8000:8000 -e PRELOAD_MODELS=false lip-sync:test
+          # Start container without GPU, skip model downloads for smoke test
+          docker run -d --name lipsync-test -p 8000:8000 \
+            -e PRELOAD_MODELS=false \
+            -e SKIP_MODEL_DOWNLOAD=true \
+            -e HF_TOKEN=${{ secrets.HF_TOKEN }} \
+            lip-sync:test
 
           # Wait for server to start
           sleep 15
