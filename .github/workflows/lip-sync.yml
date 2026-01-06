@@ -132,14 +132,13 @@ jobs:
     timeout-minutes: 30
     needs: [unit-tests, integration-tests]
     container:
-      image: python:3.11-slim
+      image: python:3.11  # Full image has gcc/g++ pre-installed
 
     steps:
       - name: Install system dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            ffmpeg git libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
-            build-essential g++
+            ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
 
       - name: Checkout code
         uses: actions/checkout@v4
