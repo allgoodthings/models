@@ -1,1 +1,1 @@
-"""Tests for lip-sync pipeline."""
+# Lip-sync tests

@@ -3,23 +3,25 @@
  * Test script for the lip-sync API.
  *
  * Usage:
- *   node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --auto
- *   node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --refs refs.json --auto
- *   node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --bbox 100,50,200,250 --end 5000
+ *   node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --upload-url https://s3.example.com/presigned-put --auto
+ *   node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --upload-url https://s3.example.com/presigned-put --refs refs.json --auto
+ *   node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --upload-url https://s3.example.com/presigned-put --bbox 100,50,200,250 --end 5000
  *
  * Options:
- *   --video      Input video URL (required)
- *   --audio      Audio URL for lip-sync (required)
- *   --output     Output video file (default: output.mp4)
- *   --auto       Auto-detect faces using InsightFace
- *   --refs       JSON file with character references for --auto mode
- *   --bbox       Face bounding box as x,y,w,h (for single face, alternative to --auto)
- *   --config     JSON file with face configuration (for multi-face)
- *   --start      Start time in ms (default: 0)
- *   --end        End time in ms (default: video duration for --auto, required for --bbox)
- *   --fps        Sample FPS for face detection (default: 3)
- *   --api        API base URL (default: http://localhost:8000)
- *   --no-enhance Disable CodeFormer enhancement
+ *   --video       Input video URL (required)
+ *   --audio       Audio URL for lip-sync (required)
+ *   --upload-url  Presigned URL for uploading output (required)
+ *   --download-url URL to download output after processing (optional, for verification)
+ *   --output      Local file to save downloaded output (default: output.mp4)
+ *   --auto        Auto-detect faces using InsightFace
+ *   --refs        JSON file with character references for --auto mode
+ *   --bbox        Face bounding box as x,y,w,h (for single face, alternative to --auto)
+ *   --config      JSON file with face configuration (for multi-face)
+ *   --start       Start time in ms (default: 0)
+ *   --end         End time in ms (default: video duration for --auto, required for --bbox)
+ *   --fps         Sample FPS for face detection (default: 3)
+ *   --api         API base URL (default: http://localhost:8000)
+ *   --no-enhance  Disable CodeFormer enhancement
  *
  * Example refs.json (for character matching):
  * [
@@ -41,6 +43,19 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 // Check if a string is a URL
 function isUrl(str) {
   return str.startsWith('http://') || str.startsWith('https://');
+}
+
+// Format milliseconds as human readable
+function formatMs(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Format bytes as human readable
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
 }
 
 // Detect faces using InsightFace
@@ -102,8 +117,9 @@ async function detectFaces(apiBase, videoUrl, characters, sampleFps = 3, startTi
 }
 
 // Process lip-sync
-async function lipsync(apiBase, videoUrl, audioUrl, requestConfig) {
+async function lipsync(apiBase, videoUrl, audioUrl, uploadUrl, requestConfig) {
   console.log('Processing lip-sync...');
+  console.log(`  Upload URL: ${uploadUrl.substring(0, 60)}...`);
 
   const response = await fetch(`${apiBase}/lipsync`, {
     method: 'POST',
@@ -111,6 +127,7 @@ async function lipsync(apiBase, videoUrl, audioUrl, requestConfig) {
     body: JSON.stringify({
       video_url: videoUrl,
       audio_url: audioUrl,
+      upload_url: uploadUrl,
       ...requestConfig,
     }),
   });
@@ -129,12 +146,27 @@ async function lipsync(apiBase, videoUrl, audioUrl, requestConfig) {
   return result;
 }
 
+// Download file from URL
+async function downloadFile(url, destPath) {
+  console.log(`Downloading output from: ${url.substring(0, 60)}...`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  writeFileSync(destPath, buffer);
+  console.log(`  Saved to: ${destPath} (${formatBytes(buffer.length)})`);
+  return buffer.length;
+}
+
 // Parse command line arguments
 function parseArgs() {
   const args = process.argv.slice(2);
   const opts = {
     video: null,
     audio: null,
+    uploadUrl: null,
+    downloadUrl: null,
     output: 'output.mp4',
     auto: false,
     refs: null,
@@ -155,6 +187,12 @@ function parseArgs() {
         break;
       case '--audio':
         opts.audio = args[++i];
+        break;
+      case '--upload-url':
+        opts.uploadUrl = args[++i];
+        break;
+      case '--download-url':
+        opts.downloadUrl = args[++i];
         break;
       case '--output':
         opts.output = args[++i];
@@ -192,23 +230,25 @@ function parseArgs() {
 Lip-Sync API Test Script
 
 Usage:
-  node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --auto
-  node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --refs refs.json --auto
-  node test-api.mjs --video https://example.com/video.mp4 --audio https://example.com/audio.mp3 --bbox 100,50,200,250 --end 5000
+  node test-api.mjs --video <url> --audio <url> --upload-url <presigned-url> --auto
+  node test-api.mjs --video <url> --audio <url> --upload-url <presigned-url> --refs refs.json --auto
+  node test-api.mjs --video <url> --audio <url> --upload-url <presigned-url> --bbox 100,50,200,250 --end 5000
 
 Options:
-  --video      Input video URL (required)
-  --audio      Audio URL for lip-sync (required)
-  --output     Output video file (default: output.mp4)
-  --auto       Auto-detect faces using InsightFace
-  --refs       JSON file with character references for face matching
-  --bbox       Face bounding box as x,y,w,h (manual, alternative to --auto)
-  --config     JSON file with face configuration (for multi-face)
-  --start      Start time in ms (default: 0)
-  --end        End time in ms (default: video duration for --auto)
-  --fps        Sample FPS for face detection (default: 3)
-  --api        API base URL (default: http://localhost:8000)
-  --no-enhance Disable CodeFormer enhancement
+  --video        Input video URL (required)
+  --audio        Audio URL for lip-sync (required)
+  --upload-url   Presigned URL for uploading output (required)
+  --download-url URL to download output after processing (optional)
+  --output       Local file to save downloaded output (default: output.mp4)
+  --auto         Auto-detect faces using InsightFace
+  --refs         JSON file with character references for face matching
+  --bbox         Face bounding box as x,y,w,h (manual, alternative to --auto)
+  --config       JSON file with face configuration (for multi-face)
+  --start        Start time in ms (default: 0)
+  --end          End time in ms (default: video duration for --auto)
+  --fps          Sample FPS for face detection (default: 3)
+  --api          API base URL (default: http://localhost:8000)
+  --no-enhance   Disable CodeFormer enhancement
 
 Example refs.json (for character matching):
 [
@@ -298,6 +338,16 @@ function buildRequestConfig(opts, detectionResult = null) {
   };
 }
 
+// Print segment information
+function printSegments(segments, indent = '      ') {
+  for (const seg of segments) {
+    const status = seg.synced ? 'SYNCED' : `SKIPPED (${seg.skip_reason})`;
+    const quality = seg.avg_quality !== null ? ` quality=${seg.avg_quality.toFixed(2)}` : '';
+    console.log(`${indent}${seg.start_ms}ms - ${seg.end_ms}ms: ${status}${quality}`);
+    console.log(`${indent}  bbox=${JSON.stringify(seg.avg_bbox)} pose=${seg.avg_head_pose.map(p => p.toFixed(1)).join(',')}`);
+  }
+}
+
 // Main function
 async function main() {
   const opts = parseArgs();
@@ -311,6 +361,10 @@ async function main() {
     console.error('Error: --audio is required');
     process.exit(1);
   }
+  if (!opts.uploadUrl) {
+    console.error('Error: --upload-url is required');
+    process.exit(1);
+  }
 
   // Validate URLs
   if (!isUrl(opts.video)) {
@@ -321,14 +375,18 @@ async function main() {
     console.error('Error: --audio must be a URL');
     process.exit(1);
   }
+  if (!isUrl(opts.uploadUrl)) {
+    console.error('Error: --upload-url must be a URL');
+    process.exit(1);
+  }
 
   console.log('Lip-Sync API Test');
   console.log('=================');
-  console.log(`API:    ${opts.api}`);
-  console.log(`Video:  ${opts.video}`);
-  console.log(`Audio:  ${opts.audio}`);
-  console.log(`Output: ${opts.output}`);
-  console.log(`Mode:   ${opts.auto ? 'Auto-detect' : opts.config ? 'Config file' : 'Manual bbox'}`);
+  console.log(`API:        ${opts.api}`);
+  console.log(`Video:      ${opts.video}`);
+  console.log(`Audio:      ${opts.audio}`);
+  console.log(`Upload URL: ${opts.uploadUrl.substring(0, 60)}...`);
+  console.log(`Mode:       ${opts.auto ? 'Auto-detect' : opts.config ? 'Config file' : 'Manual bbox'}`);
   console.log('');
 
   // Check API health first
@@ -400,34 +458,82 @@ async function main() {
 
     // Make request
     console.log('Sending lip-sync request...');
-    const result = await lipsync(opts.api, opts.video, opts.audio, requestConfig);
+    const result = await lipsync(opts.api, opts.video, opts.audio, opts.uploadUrl, requestConfig);
 
     const totalTime = Date.now() - startTime;
-
-    // Decode base64 video and save
-    if (!result.output_url) {
-      throw new Error('No output video in response');
-    }
-
-    const base64Data = result.output_url.replace('data:video/mp4;base64,', '');
-    const videoBuffer = Buffer.from(base64Data, 'base64');
-    writeFileSync(opts.output, videoBuffer);
 
     console.log('');
     console.log('Success!');
     console.log('========');
-    console.log(`  Output: ${opts.output}`);
-    console.log(`  Size: ${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`  Faces processed: ${result.faces_processed}`);
-    console.log(`  Server time: ${(result.processing_time_ms / 1000).toFixed(1)}s`);
-    console.log(`  Total time: ${(totalTime / 1000).toFixed(1)}s`);
 
-    for (const faceResult of result.face_results) {
-      if (faceResult.success) {
-        console.log(`  - ${faceResult.character_id}: OK`);
-      } else {
-        console.log(`  - ${faceResult.character_id}: FAILED - ${faceResult.error_message}`);
+    // Output metadata
+    if (result.output) {
+      console.log('Output:');
+      console.log(`  Duration: ${formatMs(result.output.duration_ms)}`);
+      console.log(`  Dimensions: ${result.output.width}x${result.output.height}`);
+      console.log(`  FPS: ${result.output.fps.toFixed(2)}`);
+      console.log(`  Size: ${formatBytes(result.output.file_size_bytes)}`);
+    }
+
+    // Timing breakdown
+    if (result.timing) {
+      console.log('');
+      console.log('Timing:');
+      console.log(`  Total:       ${formatMs(result.timing.total_ms)}`);
+      console.log(`  Download:    ${formatMs(result.timing.download_ms)}`);
+      console.log(`  Detection:   ${formatMs(result.timing.detection_ms)}`);
+      console.log(`  Lip-sync:    ${formatMs(result.timing.lipsync_ms)}`);
+      console.log(`  Enhancement: ${formatMs(result.timing.enhancement_ms)}`);
+      console.log(`  Encoding:    ${formatMs(result.timing.encoding_ms)}`);
+      console.log(`  Upload:      ${formatMs(result.timing.upload_ms)}`);
+    }
+
+    // Face results
+    if (result.faces) {
+      console.log('');
+      console.log('Faces:');
+      console.log(`  Total detected: ${result.faces.total_detected}`);
+      console.log(`  Processed: ${result.faces.processed}`);
+      console.log(`  Unknown: ${result.faces.unknown}`);
+
+      if (result.faces.results && result.faces.results.length > 0) {
+        console.log('');
+        console.log('Processed Faces:');
+        for (const faceResult of result.faces.results) {
+          const status = faceResult.success ? 'OK' : `FAILED: ${faceResult.error_message}`;
+          console.log(`  - ${faceResult.character_id}: ${status}`);
+
+          if (faceResult.summary) {
+            const syncPct = ((faceResult.summary.synced_ms / faceResult.summary.total_ms) * 100).toFixed(1);
+            console.log(`    Coverage: ${formatMs(faceResult.summary.synced_ms)}/${formatMs(faceResult.summary.total_ms)} (${syncPct}% synced)`);
+          }
+
+          if (faceResult.segments && faceResult.segments.length > 0) {
+            console.log(`    Segments (${faceResult.segments.length}):`);
+            printSegments(faceResult.segments);
+          }
+        }
       }
+
+      if (result.faces.unknown_faces && result.faces.unknown_faces.length > 0) {
+        console.log('');
+        console.log('Unknown Faces (not in request):');
+        for (const unknown of result.faces.unknown_faces) {
+          console.log(`  - ${unknown.character_id}:`);
+          if (unknown.segments && unknown.segments.length > 0) {
+            printSegments(unknown.segments);
+          }
+        }
+      }
+    }
+
+    console.log('');
+    console.log(`Client total time: ${formatMs(totalTime)}`);
+
+    // Download output if download URL provided
+    if (opts.downloadUrl) {
+      console.log('');
+      await downloadFile(opts.downloadUrl, opts.output);
     }
 
   } catch (err) {

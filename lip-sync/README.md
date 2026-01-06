@@ -211,19 +211,113 @@ Process lip-sync and upload result to presigned URL.
 ```json
 {
   "success": true,
-  "processing_time_ms": 45000,
-  "face_results": [
-    {"character_id": "alice", "success": true}
-  ],
+  "faces": {
+    "total_detected": 2,
+    "processed": 1,
+    "unknown": 1,
+    "results": [
+      {
+        "character_id": "alice",
+        "success": true,
+        "segments": [
+          {
+            "start_ms": 0,
+            "end_ms": 3000,
+            "synced": true,
+            "skip_reason": null,
+            "avg_quality": 0.92,
+            "avg_bbox": [102, 51, 198, 248],
+            "avg_head_pose": [5.2, -12.3, 2.1]
+          },
+          {
+            "start_ms": 3000,
+            "end_ms": 4200,
+            "synced": false,
+            "skip_reason": "profile_view",
+            "avg_quality": null,
+            "avg_bbox": [95, 48, 190, 240],
+            "avg_head_pose": [8.1, 52.4, -3.2]
+          },
+          {
+            "start_ms": 4200,
+            "end_ms": 5000,
+            "synced": true,
+            "skip_reason": null,
+            "avg_quality": 0.88,
+            "avg_bbox": [105, 52, 195, 245],
+            "avg_head_pose": [4.5, -8.2, 1.8]
+          }
+        ],
+        "summary": {
+          "total_ms": 5000,
+          "synced_ms": 3800,
+          "skipped_ms": 1200
+        }
+      }
+    ],
+    "unknown_faces": [
+      {
+        "character_id": "face_1",
+        "segments": [
+          {
+            "start_ms": 1000,
+            "end_ms": 3500,
+            "synced": true,
+            "skip_reason": null,
+            "avg_quality": 0.85,
+            "avg_bbox": [450, 80, 160, 200],
+            "avg_head_pose": [2.1, 15.3, -1.5]
+          }
+        ]
+      }
+    ]
+  },
   "output": {
     "duration_ms": 5000,
     "width": 1920,
     "height": 1080,
-    "file_size_bytes": 2500000,
-    "fps": 30.0
+    "fps": 30.0,
+    "file_size_bytes": 2500000
+  },
+  "timing": {
+    "total_ms": 45000,
+    "download_ms": 3200,
+    "detection_ms": 5500,
+    "lipsync_ms": 28000,
+    "enhancement_ms": 4500,
+    "encoding_ms": 2300,
+    "upload_ms": 1500
   }
 }
 ```
+
+#### Response Fields
+
+| Field | Description |
+|-------|-------------|
+| `success` | Whether processing succeeded |
+| `error_message` | Error message if failed |
+| `faces.total_detected` | Total unique faces detected during processing |
+| `faces.processed` | Number of faces from request that were processed |
+| `faces.unknown` | Number of faces detected but not in request |
+| `faces.results[]` | Results for each requested face |
+| `faces.results[].segments[]` | Time segments where face had same sync state |
+| `faces.results[].summary` | Summary of sync coverage (total/synced/skipped ms) |
+| `faces.unknown_faces[]` | Faces detected but not in request (for validation) |
+| `output` | Output video metadata |
+| `timing` | Processing time breakdown by stage |
+
+#### Segment States
+
+Each segment represents a contiguous time range where a face had the same sync state:
+
+- **synced=true**: Lip-sync was applied (face visible, suitable pose, good quality)
+- **synced=false**: Lip-sync was skipped, with `skip_reason`:
+  - `profile_view`: Face turned too far (yaw > 45°)
+  - `face_too_small`: Face bbox < 64px wide
+  - `low_detection_quality`: Detection confidence < 0.5
+
+The `avg_*` fields show averaged values across all frames in the segment (for display/validation only - actual processing uses per-frame values).
 
 ## Quick Start
 
@@ -253,17 +347,28 @@ MODELS_DIR=./models uvicorn lipsync.server.main:app --reload
 ## Testing
 
 ```bash
-# Auto-detect faces and process
+# Auto-detect faces and process (requires presigned upload URL)
 node scripts/test-api.mjs \
   --video https://example.com/video.mp4 \
   --audio https://example.com/audio.mp3 \
+  --upload-url https://storage.example.com/presigned-put-url \
   --auto
 
 # With character references for identity matching
 node scripts/test-api.mjs \
   --video https://example.com/video.mp4 \
   --audio https://example.com/audio.mp3 \
+  --upload-url https://storage.example.com/presigned-put-url \
   --refs characters.json \
+  --auto
+
+# Download output after processing (optional)
+node scripts/test-api.mjs \
+  --video https://example.com/video.mp4 \
+  --audio https://example.com/audio.mp3 \
+  --upload-url https://storage.example.com/presigned-put-url \
+  --download-url https://storage.example.com/output.mp4 \
+  --output result.mp4 \
   --auto
 ```
 

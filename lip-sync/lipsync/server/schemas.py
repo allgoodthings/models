@@ -108,7 +108,7 @@ class DetectFacesResponse(BaseModel):
 
 
 # =============================================================================
-# Lip-Sync Processing
+# Lip-Sync Request
 # =============================================================================
 
 
@@ -138,6 +138,10 @@ class LipSyncRequest(BaseModel):
 
     video_url: str = Field(..., description="URL to input video file")
     audio_url: str = Field(..., description="URL to audio file for lip-sync")
+    upload_url: str = Field(
+        ...,
+        description="Presigned URL for uploading the output video (PUT request)",
+    )
     faces: List[FaceJobRequest] = Field(
         ..., description="List of face jobs to process", min_length=1
     )
@@ -152,23 +156,115 @@ class LipSyncRequest(BaseModel):
     )
 
 
-class FaceResultInfo(BaseModel):
-    """Result info for a processed face."""
+# =============================================================================
+# Lip-Sync Response - Segment-based
+# =============================================================================
 
-    character_id: str
-    success: bool
-    error_message: Optional[str] = None
+
+class FaceSegment(BaseModel):
+    """A contiguous time range where face had same sync state."""
+
+    start_ms: int = Field(..., description="Segment start time in milliseconds")
+    end_ms: int = Field(..., description="Segment end time in milliseconds")
+    synced: bool = Field(..., description="Whether lip-sync was applied in this segment")
+    skip_reason: Optional[str] = Field(
+        None,
+        description="Why sync was skipped (profile_view, face_too_small, etc.)",
+    )
+    avg_quality: Optional[float] = Field(
+        None, description="Average sync quality in this segment (if synced)"
+    )
+    avg_bbox: Tuple[int, int, int, int] = Field(
+        ..., description="Average bounding box in this segment"
+    )
+    avg_head_pose: Tuple[float, float, float] = Field(
+        ..., description="Average head pose (pitch, yaw, roll) in this segment"
+    )
+
+
+class FaceSummary(BaseModel):
+    """Summary of sync coverage for a face."""
+
+    total_ms: int = Field(..., description="Total time range for this face")
+    synced_ms: int = Field(..., description="Milliseconds where sync was applied")
+    skipped_ms: int = Field(..., description="Milliseconds where sync was skipped")
+
+
+class FaceResult(BaseModel):
+    """Complete result for a processed face."""
+
+    character_id: str = Field(..., description="Character identifier")
+    success: bool = Field(..., description="Whether processing succeeded")
+    error_message: Optional[str] = Field(None, description="Error if failed")
+    segments: List[FaceSegment] = Field(
+        default_factory=list, description="Time segments with sync state"
+    )
+    summary: Optional[FaceSummary] = Field(
+        None, description="Summary of sync coverage"
+    )
+
+
+class UnknownFace(BaseModel):
+    """A face detected but not in the request."""
+
+    character_id: str = Field(
+        ..., description="Auto-assigned ID (face_1, face_2, etc.)"
+    )
+    segments: List[FaceSegment] = Field(
+        ..., description="Time segments where this face was visible"
+    )
+
+
+class FacesResult(BaseModel):
+    """Container for all face-related results."""
+
+    total_detected: int = Field(..., description="Total faces detected in video")
+    processed: int = Field(..., description="Faces that were processed (from request)")
+    unknown: int = Field(..., description="Faces detected but not in request")
+    results: List[FaceResult] = Field(
+        ..., description="Results for requested faces"
+    )
+    unknown_faces: List[UnknownFace] = Field(
+        default_factory=list, description="Faces detected but not in request"
+    )
+
+
+class OutputMetadata(BaseModel):
+    """Metadata about the output video."""
+
+    duration_ms: int = Field(..., description="Output video duration in milliseconds")
+    width: int = Field(..., description="Video width in pixels")
+    height: int = Field(..., description="Video height in pixels")
+    fps: float = Field(..., description="Video frame rate")
+    file_size_bytes: int = Field(..., description="Output file size in bytes")
+
+
+class TimingBreakdown(BaseModel):
+    """Detailed timing breakdown of processing stages."""
+
+    total_ms: int = Field(..., description="Total processing time")
+    download_ms: int = Field(..., description="Time to download video and audio")
+    detection_ms: int = Field(..., description="Time for face detection/tracking")
+    lipsync_ms: int = Field(..., description="Time for lip-sync processing")
+    enhancement_ms: int = Field(..., description="Time for CodeFormer enhancement")
+    encoding_ms: int = Field(..., description="Time for final video encoding")
+    upload_ms: int = Field(..., description="Time to upload to presigned URL")
 
 
 class LipSyncResponse(BaseModel):
-    """Lip-sync processing response."""
+    """Lip-sync processing response with segment-based face data."""
 
-    success: bool
-    faces_processed: int
-    face_results: List[FaceResultInfo]
-    processing_time_ms: int
-    output_url: Optional[str] = None
-    error_message: Optional[str] = None
+    success: bool = Field(..., description="Whether processing succeeded")
+    error_message: Optional[str] = Field(None, description="Error if failed")
+    faces: Optional[FacesResult] = Field(
+        None, description="Face detection and processing results"
+    )
+    output: Optional[OutputMetadata] = Field(
+        None, description="Output video metadata"
+    )
+    timing: Optional[TimingBreakdown] = Field(
+        None, description="Processing time breakdown"
+    )
 
 
 # =============================================================================

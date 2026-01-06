@@ -73,3 +73,10 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "cpu: marks tests that run full pipeline on CPU",
+]
+
+[project.scripts]
+test-cpu = "scripts.test-cpu-validation:main"

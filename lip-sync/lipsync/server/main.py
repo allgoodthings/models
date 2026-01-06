@@ -5,7 +5,7 @@ Usage:
     uvicorn lipsync.server.main:app --host 0.0.0.0 --port 8000
 """
 
-import base64
+import json
 import logging
 import os
 import subprocess
@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Dict, List, Optional, Set
 
 import cv2
 import httpx
@@ -27,11 +27,23 @@ from .schemas import (
     DetectedFaceWithMetadata,
     DetectFacesRequest,
     DetectFacesResponse,
-    FaceResultInfo,
+    FaceResult,
+    FaceSegment,
+    FacesResult,
+    FaceSummary,
     FrameAnalysis,
     HealthResponse,
     LipSyncRequest,
     LipSyncResponse,
+    OutputMetadata,
+    TimingBreakdown,
+    UnknownFace,
+)
+from .segment_builder import (
+    FrameFaceData,
+    build_segments_for_face,
+    compute_summary,
+    extend_segment_end_times,
 )
 
 # Configure logging
@@ -50,6 +62,9 @@ face_detector: Optional[InsightFaceDetector] = None
 # Default models directory
 MODELS_DIR = os.environ.get("MODELS_DIR", "/app/models")
 
+# Detection FPS for tracking during lipsync
+LIPSYNC_DETECTION_FPS = 5
+
 
 def check_models_exist() -> bool:
     """Check if model weights are present."""
@@ -60,7 +75,6 @@ def check_models_exist() -> bool:
         if not os.path.exists(path):
             logger.debug(f"  {model_dir}: NOT FOUND")
             return False
-        # Check if directory has files (not just empty)
         if not any(os.scandir(path)):
             logger.debug(f"  {model_dir}: EMPTY")
             return False
@@ -73,9 +87,7 @@ def download_models() -> None:
     logger.info(f"Downloading models to {MODELS_DIR}...")
     logger.info("This may take 10-15 minutes on first run...")
 
-    # Try to import and run the download script
     try:
-        # Add scripts directory to path
         scripts_dir = os.path.join(os.path.dirname(__file__), "..", "..", "scripts")
         sys.path.insert(0, scripts_dir)
 
@@ -100,7 +112,6 @@ def download_models() -> None:
 
     except ImportError as e:
         logger.warning(f"Could not import download functions: {e}")
-        # Fallback: run the script directly
         script_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "scripts", "download_models.py"
         )
@@ -116,16 +127,12 @@ def download_models() -> None:
             )
 
 
-async def download_file(url: str, dest_path: str) -> str:
+async def download_file(url: str, dest_path: str) -> float:
     """
     Download a file from URL.
 
-    Args:
-        url: URL to download from
-        dest_path: Local path to save file
-
     Returns:
-        Path to downloaded file
+        Download time in milliseconds
     """
     logger.info(f"Downloading file from {url}")
     start_time = time.time()
@@ -137,23 +144,15 @@ async def download_file(url: str, dest_path: str) -> str:
         with open(dest_path, "wb") as f:
             f.write(response.content)
 
-    elapsed = time.time() - start_time
+    elapsed_ms = (time.time() - start_time) * 1000
     file_size = os.path.getsize(dest_path) / (1024 * 1024)
-    logger.info(f"  Downloaded {file_size:.2f}MB in {elapsed:.2f}s")
+    logger.info(f"  Downloaded {file_size:.2f}MB in {elapsed_ms:.0f}ms")
 
-    return dest_path
+    return elapsed_ms
 
 
 async def download_image(url: str) -> np.ndarray:
-    """
-    Download image from URL and return as numpy array (BGR).
-
-    Args:
-        url: URL to image
-
-    Returns:
-        BGR numpy array
-    """
+    """Download image from URL and return as numpy array (BGR)."""
     logger.debug(f"Downloading image from {url}")
 
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
@@ -169,15 +168,35 @@ async def download_image(url: str) -> np.ndarray:
         return img
 
 
-def get_video_info(video_path: str) -> dict:
+async def upload_file(url: str, file_path: str) -> float:
     """
-    Get video duration and dimensions using ffprobe.
+    Upload a file to a presigned URL using PUT.
 
     Returns:
-        Dict with duration_ms, width, height
+        Upload time in milliseconds
     """
-    import json
+    logger.info(f"Uploading file to presigned URL...")
+    start_time = time.time()
 
+    file_size = os.path.getsize(file_path)
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        with open(file_path, "rb") as f:
+            response = await client.put(
+                url,
+                content=f.read(),
+                headers={"Content-Type": "video/mp4"},
+            )
+            response.raise_for_status()
+
+    elapsed_ms = (time.time() - start_time) * 1000
+    logger.info(f"  Uploaded {file_size / (1024*1024):.2f}MB in {elapsed_ms:.0f}ms")
+
+    return elapsed_ms
+
+
+def get_video_info(video_path: str) -> dict:
+    """Get video duration, dimensions, and fps using ffprobe."""
     cmd = [
         "ffprobe",
         "-v",
@@ -198,18 +217,25 @@ def get_video_info(video_path: str) -> dict:
     duration = float(data.get("format", {}).get("duration", 0))
     duration_ms = int(duration * 1000)
 
-    # Find video stream
-    width, height = 0, 0
+    width, height, fps = 0, 0, 30.0
     for stream in data.get("streams", []):
         if stream.get("codec_type") == "video":
             width = stream.get("width", 0)
             height = stream.get("height", 0)
+            # Parse frame rate (e.g., "30/1" or "30000/1001")
+            fps_str = stream.get("r_frame_rate", "30/1")
+            if "/" in fps_str:
+                num, den = fps_str.split("/")
+                fps = float(num) / float(den) if float(den) > 0 else 30.0
+            else:
+                fps = float(fps_str)
             break
 
     return {
         "duration_ms": duration_ms,
         "width": width,
         "height": height,
+        "fps": fps,
     }
 
 
@@ -220,19 +246,7 @@ def extract_frames_at_fps(
     start_time_ms: int = 0,
     end_time_ms: Optional[int] = None,
 ) -> list:
-    """
-    Extract frames from video at specified FPS.
-
-    Args:
-        video_path: Path to video file
-        output_dir: Directory to save frames
-        fps: Frames per second to extract (integer)
-        start_time_ms: Start time in milliseconds
-        end_time_ms: End time in milliseconds (None = video end)
-
-    Returns:
-        List of (timestamp_ms, frame_path) tuples
-    """
+    """Extract frames from video at specified FPS."""
     video_info = get_video_info(video_path)
     video_duration_ms = video_info["duration_ms"]
 
@@ -295,7 +309,6 @@ async def lifespan(app: FastAPI):
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         logger.info(f"GPU: {gpu_name} ({gpu_memory:.1f}GB)")
 
-    # Check if models exist, download if not
     logger.info("-" * 40)
     logger.info("Checking model weights...")
     if not check_models_exist():
@@ -304,14 +317,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"Models found at {MODELS_DIR}")
 
-    # Initialize face detector
     logger.info("-" * 40)
     logger.info("[1/4] Loading InsightFace...")
     face_detector = InsightFaceDetector(model_name="buffalo_l", device=device)
     face_detector.load()
     logger.info("[1/4] InsightFace loaded successfully")
 
-    # Initialize lip-sync pipeline
     logger.info("-" * 40)
     logger.info("[2/4] Initializing LipSyncPipeline...")
     config = PipelineConfig(
@@ -324,13 +335,11 @@ async def lifespan(app: FastAPI):
     )
     pipeline = LipSyncPipeline(config)
 
-    # Load pipeline models in sequence
     logger.info("[3/4] Loading MuseTalk + LivePortrait...")
     pipeline.load_models()
     logger.info("[3/4] MuseTalk + LivePortrait loaded successfully")
 
     logger.info("[4/4] Loading CodeFormer...")
-    # CodeFormer is loaded lazily by pipeline, force load it
     if hasattr(pipeline, "_load_codeformer"):
         pipeline._load_codeformer()
     logger.info("[4/4] CodeFormer loaded successfully")
@@ -341,7 +350,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
     logger.info("Shutting down server...")
     if pipeline is not None:
         logger.info("Unloading pipeline models...")
@@ -352,7 +360,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Multi-Face Lip-Sync API",
     description="Process lip-sync for multiple faces using MuseTalk + LivePortrait + CodeFormer with InsightFace detection",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -368,11 +376,9 @@ async def health():
         gpu_name = torch.cuda.get_device_name(0)
         gpu_memory_gb = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
 
-    # Check model status
     insightface_loaded = face_detector is not None and face_detector.is_loaded
     pipeline_loaded = pipeline is not None and pipeline.is_loaded
 
-    # Determine status
     if insightface_loaded and pipeline_loaded:
         status = "healthy"
     elif insightface_loaded or pipeline_loaded:
@@ -396,12 +402,6 @@ async def health():
 async def detect_faces(request: DetectFacesRequest):
     """
     Detect and track faces across video frames using InsightFace.
-
-    Downloads video and reference images from URLs, extracts face embeddings
-    from reference images, samples video frames at specified FPS, and matches
-    detected faces to characters using embedding similarity.
-
-    Returns per-frame bounding boxes with syncability metadata.
     """
     if face_detector is None or not face_detector.is_loaded:
         raise HTTPException(status_code=503, detail="Face detector not loaded")
@@ -411,23 +411,15 @@ async def detect_faces(request: DetectFacesRequest):
     logger.info("=" * 60)
     logger.info(f"  Video URL: {request.video_url}")
     logger.info(f"  Sample FPS: {request.sample_fps}")
-    logger.info(f"  Time range: {request.start_time_ms}ms - {request.end_time_ms}ms")
-    logger.info(f"  Similarity threshold: {request.similarity_threshold}")
     logger.info(f"  Characters: {len(request.characters)}")
-    for char in request.characters:
-        logger.info(f"    - {char.id}: {char.name}")
-
-    start_time = time.time()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Download video
         video_path = os.path.join(tmpdir, "video.mp4")
         try:
             await download_file(request.video_url, video_path)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to download video: {e}")
 
-        # Get video info
         try:
             video_info = get_video_info(video_path)
         except Exception as e:
@@ -437,60 +429,37 @@ async def detect_faces(request: DetectFacesRequest):
         height = video_info["height"]
         video_duration_ms = video_info["duration_ms"]
 
-        logger.info(f"  Video: {width}x{height}, {video_duration_ms}ms duration")
-
-        # Clear existing references and load new ones
         face_detector.clear_references()
 
-        logger.info("  Loading reference images...")
         for char in request.characters:
             try:
                 ref_image = await download_image(char.reference_image_url)
-                success = face_detector.load_reference(char.id, ref_image)
-                if success:
-                    logger.info(f"    - {char.id}: Reference loaded")
-                else:
-                    logger.warning(f"    - {char.id}: No face found in reference image")
+                face_detector.load_reference(char.id, ref_image)
             except Exception as e:
-                logger.warning(f"    - {char.id}: Failed to load reference: {e}")
+                logger.warning(f"Failed to load reference for {char.id}: {e}")
 
-        # Extract frames at FPS
         frames_dir = os.path.join(tmpdir, "frames")
         os.makedirs(frames_dir, exist_ok=True)
 
-        try:
-            frame_paths = extract_frames_at_fps(
-                video_path,
-                frames_dir,
-                request.sample_fps,
-                request.start_time_ms or 0,
-                request.end_time_ms,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to extract frames: {e}")
+        frame_paths = extract_frames_at_fps(
+            video_path,
+            frames_dir,
+            request.sample_fps,
+            request.start_time_ms or 0,
+            request.end_time_ms,
+        )
 
-        if not frame_paths:
-            raise HTTPException(status_code=500, detail="No frames extracted from video")
-
-        logger.info(f"  Running face detection on {len(frame_paths)} frames...")
-
-        # Process each frame
         frame_analyses = []
         characters_detected = set()
-        total_faces = 0
 
         for timestamp_ms, frame_path in frame_paths:
-            # Read frame
             frame = cv2.imread(frame_path)
             if frame is None:
-                logger.warning(f"Failed to read frame at {timestamp_ms}ms")
                 frame_analyses.append(FrameAnalysis(timestamp_ms=timestamp_ms, faces=[]))
                 continue
 
-            # Detect faces
             faces = face_detector.detect_faces(frame, request.similarity_threshold)
 
-            # Convert to response format
             face_results = []
             for face in faces:
                 face_results.append(
@@ -504,20 +473,12 @@ async def detect_faces(request: DetectFacesRequest):
                         skip_reason=face.skip_reason,
                     )
                 )
-
-                # Track which characters were detected
                 if not face.character_id.startswith("face_"):
                     characters_detected.add(face.character_id)
 
             frame_analyses.append(
                 FrameAnalysis(timestamp_ms=timestamp_ms, faces=face_results)
             )
-            total_faces += len(face_results)
-
-        elapsed = time.time() - start_time
-        logger.info(f"  Detected {total_faces} faces across {len(frame_analyses)} frames")
-        logger.info(f"  Characters found: {list(characters_detected)}")
-        logger.info(f"  Processing time: {elapsed:.2f}s")
 
     return DetectFacesResponse(
         frames=frame_analyses,
@@ -532,64 +493,113 @@ async def detect_faces(request: DetectFacesRequest):
 @app.post("/lipsync", response_model=LipSyncResponse)
 async def lipsync(request: LipSyncRequest):
     """
-    Process multi-face lip-sync from URLs.
+    Process multi-face lip-sync and upload result to presigned URL.
 
-    Downloads video and audio from URLs, processes lip-sync for each face,
-    returns result with base64-encoded output video.
-
-    Example request:
-    ```json
-    {
-        "video_url": "https://example.com/video.mp4",
-        "audio_url": "https://example.com/audio.mp3",
-        "faces": [
-            {
-                "character_id": "alice",
-                "bbox": [100, 50, 200, 250],
-                "start_time_ms": 0,
-                "end_time_ms": 5000
-            }
-        ],
-        "enhance_quality": true
-    }
-    ```
+    Tracks face detection per-frame during processing to build segment data.
+    Returns detailed metadata about processed faces and timing.
     """
     if pipeline is None:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
+    if face_detector is None or not face_detector.is_loaded:
+        raise HTTPException(status_code=503, detail="Face detector not loaded")
 
     logger.info("=" * 60)
     logger.info("LIP-SYNC")
     logger.info("=" * 60)
     logger.info(f"  Video URL: {request.video_url}")
     logger.info(f"  Audio URL: {request.audio_url}")
+    logger.info(f"  Upload URL: {request.upload_url[:50]}...")
     logger.info(f"  Faces: {len(request.faces)}")
     for face in request.faces:
-        logger.info(
-            f"    - {face.character_id}: bbox={face.bbox}, "
-            f"{face.start_time_ms}ms-{face.end_time_ms}ms"
-        )
-    logger.info(f"  Enhance: {request.enhance_quality}")
-    logger.info(f"  Fidelity: {request.fidelity_weight}")
+        logger.info(f"    - {face.character_id}: bbox={face.bbox}")
 
-    start_time = time.time()
+    total_start = time.time()
+    timing = {
+        "download_ms": 0,
+        "detection_ms": 0,
+        "lipsync_ms": 0,
+        "enhancement_ms": 0,
+        "encoding_ms": 0,
+        "upload_ms": 0,
+    }
+
+    # Get requested character IDs
+    requested_ids: Set[str] = {f.character_id for f in request.faces}
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Download video and audio
         video_path = os.path.join(tmpdir, "video.mp4")
         audio_path = os.path.join(tmpdir, "audio.wav")
         output_path = os.path.join(tmpdir, "output.mp4")
 
+        # Download video and audio
         try:
+            download_start = time.time()
             await download_file(request.video_url, video_path)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to download video: {e}")
-
-        try:
             await download_file(request.audio_url, audio_path)
+            timing["download_ms"] = int((time.time() - download_start) * 1000)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to download audio: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to download: {e}")
 
-        # Convert request faces to FaceJob objects
+        # Get video info
+        try:
+            video_info = get_video_info(video_path)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to get video info: {e}")
+
+        # Run face detection for tracking
+        detection_start = time.time()
+        logger.info("  Running face detection for tracking...")
+
+        frames_dir = os.path.join(tmpdir, "frames")
+        os.makedirs(frames_dir, exist_ok=True)
+
+        # Determine time range from request
+        start_ms = min(f.start_time_ms for f in request.faces)
+        end_ms = max(f.end_time_ms for f in request.faces)
+
+        frame_paths = extract_frames_at_fps(
+            video_path, frames_dir, LIPSYNC_DETECTION_FPS, start_ms, end_ms
+        )
+
+        # Collect per-frame data for each character
+        frame_data: Dict[str, List[FrameFaceData]] = {f.character_id: [] for f in request.faces}
+        unknown_frame_data: Dict[str, List[FrameFaceData]] = {}
+        all_detected_ids: Set[str] = set()
+
+        for timestamp_ms, frame_path in frame_paths:
+            frame = cv2.imread(frame_path)
+            if frame is None:
+                continue
+
+            faces = face_detector.detect_faces(frame, similarity_threshold=0.5)
+
+            for face in faces:
+                all_detected_ids.add(face.character_id)
+
+                face_data_entry = FrameFaceData(
+                    timestamp_ms=timestamp_ms,
+                    character_id=face.character_id,
+                    bbox=face.bbox,
+                    head_pose=face.head_pose,
+                    confidence=face.confidence,
+                    syncable=face.syncable,
+                    sync_quality=face.sync_quality,
+                    skip_reason=face.skip_reason,
+                )
+
+                if face.character_id in requested_ids:
+                    frame_data[face.character_id].append(face_data_entry)
+                else:
+                    # Unknown face
+                    if face.character_id not in unknown_frame_data:
+                        unknown_frame_data[face.character_id] = []
+                    unknown_frame_data[face.character_id].append(face_data_entry)
+
+        timing["detection_ms"] = int((time.time() - detection_start) * 1000)
+        logger.info(f"  Detection complete: {len(all_detected_ids)} unique faces")
+
+        # Process lip-sync
+        lipsync_start = time.time()
         face_jobs = [
             FaceJob(
                 character_id=face.character_id,
@@ -601,14 +611,12 @@ async def lipsync(request: LipSyncRequest):
             for face in request.faces
         ]
 
-        face_results = []
+        face_results: List[FaceResult] = []
 
         try:
-            # Update pipeline config
             pipeline.config.enhance_quality = request.enhance_quality
             pipeline.config.fidelity_weight = request.fidelity_weight
 
-            # Process lip-sync
             if len(face_jobs) == 1:
                 job = face_jobs[0]
                 pipeline.process_single_face(
@@ -624,57 +632,137 @@ async def lipsync(request: LipSyncRequest):
                     output_path,
                 )
 
-            # Mark all faces as successful
-            for face in request.faces:
-                face_results.append(
-                    FaceResultInfo(
-                        character_id=face.character_id,
-                        success=True,
+            timing["lipsync_ms"] = int((time.time() - lipsync_start) * 1000)
+
+            # Build segments for each requested face
+            frame_interval_ms = 1000 // LIPSYNC_DETECTION_FPS
+
+            for face_req in request.faces:
+                char_id = face_req.character_id
+                frames = frame_data.get(char_id, [])
+
+                if frames:
+                    segments = build_segments_for_face(frames)
+                    extend_segment_end_times(segments, frame_interval_ms)
+
+                    total_ms, synced_ms, skipped_ms = compute_summary(segments)
+
+                    face_segments = [
+                        FaceSegment(
+                            start_ms=seg.start_ms,
+                            end_ms=seg.end_ms,
+                            synced=seg.synced,
+                            skip_reason=seg.skip_reason,
+                            avg_quality=seg.avg_quality,
+                            avg_bbox=seg.avg_bbox,
+                            avg_head_pose=seg.avg_head_pose,
+                        )
+                        for seg in segments
+                    ]
+
+                    face_results.append(
+                        FaceResult(
+                            character_id=char_id,
+                            success=True,
+                            segments=face_segments,
+                            summary=FaceSummary(
+                                total_ms=total_ms,
+                                synced_ms=synced_ms,
+                                skipped_ms=skipped_ms,
+                            ),
+                        )
                     )
-                )
+                else:
+                    # No detection data for this face
+                    face_results.append(
+                        FaceResult(
+                            character_id=char_id,
+                            success=True,
+                            error_message="No detection data available",
+                            segments=[],
+                            summary=FaceSummary(
+                                total_ms=face_req.end_time_ms - face_req.start_time_ms,
+                                synced_ms=face_req.end_time_ms - face_req.start_time_ms,
+                                skipped_ms=0,
+                            ),
+                        )
+                    )
 
         except Exception as e:
             logger.error(f"Lip-sync processing failed: {e}")
-            # Mark all faces as failed
-            for face in request.faces:
-                face_results.append(
-                    FaceResultInfo(
-                        character_id=face.character_id,
-                        success=False,
-                        error_message=str(e),
-                    )
-                )
-
-            processing_time = int((time.time() - start_time) * 1000)
             return LipSyncResponse(
                 success=False,
-                faces_processed=0,
-                face_results=face_results,
-                processing_time_ms=processing_time,
                 error_message=str(e),
             )
 
-        # Read output file and encode as base64
+        # Build unknown faces data
+        unknown_faces: List[UnknownFace] = []
+        for char_id, frames in unknown_frame_data.items():
+            segments = build_segments_for_face(frames)
+            extend_segment_end_times(segments, frame_interval_ms)
+
+            face_segments = [
+                FaceSegment(
+                    start_ms=seg.start_ms,
+                    end_ms=seg.end_ms,
+                    synced=seg.synced,
+                    skip_reason=seg.skip_reason,
+                    avg_quality=seg.avg_quality,
+                    avg_bbox=seg.avg_bbox,
+                    avg_head_pose=seg.avg_head_pose,
+                )
+                for seg in segments
+            ]
+
+            unknown_faces.append(
+                UnknownFace(character_id=char_id, segments=face_segments)
+            )
+
+        # Check output exists
         if not os.path.exists(output_path):
             raise HTTPException(status_code=500, detail="Output file not created")
 
-        with open(output_path, "rb") as f:
-            output_bytes = f.read()
+        # Get output file info
+        output_size = os.path.getsize(output_path)
+        output_info = get_video_info(output_path)
 
-        video_base64 = base64.b64encode(output_bytes).decode("utf-8")
-        output_url = f"data:video/mp4;base64,{video_base64}"
+        # Upload to presigned URL
+        try:
+            timing["upload_ms"] = int(await upload_file(request.upload_url, output_path))
+        except Exception as e:
+            logger.error(f"Upload failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to upload: {e}")
 
-    processing_time = int((time.time() - start_time) * 1000)
+    total_ms = int((time.time() - total_start) * 1000)
 
-    logger.info(f"  Processing complete in {processing_time}ms")
-    logger.info(f"  Output size: {len(output_bytes) / (1024*1024):.2f}MB")
+    logger.info(f"  Processing complete in {total_ms}ms")
+    logger.info(f"  Output size: {output_size / (1024*1024):.2f}MB")
 
     return LipSyncResponse(
         success=True,
-        faces_processed=len(face_results),
-        face_results=face_results,
-        processing_time_ms=processing_time,
-        output_url=output_url,
+        faces=FacesResult(
+            total_detected=len(all_detected_ids),
+            processed=len(face_results),
+            unknown=len(unknown_faces),
+            results=face_results,
+            unknown_faces=unknown_faces,
+        ),
+        output=OutputMetadata(
+            duration_ms=output_info["duration_ms"],
+            width=output_info["width"],
+            height=output_info["height"],
+            fps=output_info["fps"],
+            file_size_bytes=output_size,
+        ),
+        timing=TimingBreakdown(
+            total_ms=total_ms,
+            download_ms=timing["download_ms"],
+            detection_ms=timing["detection_ms"],
+            lipsync_ms=timing["lipsync_ms"],
+            enhancement_ms=timing["enhancement_ms"],
+            encoding_ms=timing["encoding_ms"],
+            upload_ms=timing["upload_ms"],
+        ),
     )
 
 
@@ -683,12 +771,12 @@ async def root():
     """Root endpoint with API info."""
     return {
         "name": "Multi-Face Lip-Sync API",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "docs": "/docs",
         "health": "/health",
         "endpoints": [
             "POST /detect-faces - Detect faces with InsightFace (JSON)",
-            "POST /lipsync - Process lip-sync from URLs (JSON)",
+            "POST /lipsync - Process lip-sync, upload to presigned URL (JSON)",
             "GET /health - Health check",
         ],
     }
