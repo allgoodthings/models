@@ -57,9 +57,10 @@ def download_codeformer(target_dir: str) -> None:
     codeformer_dir = os.path.join(target_dir, "codeformer")
     os.makedirs(codeformer_dir, exist_ok=True)
 
-    # Download main CodeFormer model
+    # Download main CodeFormer model (from HF Space, not model repo)
     hf_hub_download(
         repo_id="sczhou/CodeFormer",
+        repo_type="space",
         filename="CodeFormer/codeformer.pth",
         local_dir=codeformer_dir,
     )
@@ -67,6 +68,7 @@ def download_codeformer(target_dir: str) -> None:
     # Download face detection model (RetinaFace)
     hf_hub_download(
         repo_id="sczhou/CodeFormer",
+        repo_type="space",
         filename="facelib/detection_Resnet50_Final.pth",
         local_dir=codeformer_dir,
     )
@@ -74,6 +76,7 @@ def download_codeformer(target_dir: str) -> None:
     # Download face parsing model
     hf_hub_download(
         repo_id="sczhou/CodeFormer",
+        repo_type="space",
         filename="facelib/parsing_parsenet.pth",
         local_dir=codeformer_dir,
     )
