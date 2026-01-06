@@ -188,13 +188,13 @@ jobs:
           CUDA_VISIBLE_DEVICES: ""
 
   # ==========================================================================
-  # Docker Build Test
+  # Docker Build - Only after all tests pass
   # ==========================================================================
   docker-build:
-    name: Docker Build Test
+    name: Docker Build
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [unit-tests, integration-tests]
+    needs: [unit-tests, integration-tests, lint]
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
 
     steps:
