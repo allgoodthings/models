@@ -27,6 +27,7 @@ from .schemas import (
     DetectedFaceWithMetadata,
     DetectFacesRequest,
     DetectFacesResponse,
+    DetectionTimingBreakdown,
     FaceResult,
     FaceSegment,
     FacesResult,
@@ -246,7 +247,7 @@ def extract_frames_at_fps(
     start_time_ms: int = 0,
     end_time_ms: Optional[int] = None,
 ) -> list:
-    """Extract frames from video at specified FPS."""
+    """Extract frames from video at specified FPS using a single ffmpeg command."""
     video_info = get_video_info(video_path)
     video_duration_ms = video_info["duration_ms"]
 
@@ -255,36 +256,40 @@ def extract_frames_at_fps(
     else:
         end_time_ms = min(end_time_ms, video_duration_ms)
 
+    start_seconds = start_time_ms / 1000.0
+    duration_seconds = (end_time_ms - start_time_ms) / 1000.0
     interval_ms = 1000 // fps
-    frames = []
 
     logger.info(f"Extracting frames at {fps} FPS from {start_time_ms}ms to {end_time_ms}ms")
 
-    timestamp_ms = start_time_ms
+    # Extract all frames in a single ffmpeg command
+    output_pattern = os.path.join(output_dir, "frame_%04d.jpg")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss", str(start_seconds),
+        "-i", video_path,
+        "-t", str(duration_seconds),
+        "-vf", f"fps={fps}",
+        "-q:v", "2",  # High quality JPEG
+        output_pattern,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.warning(f"ffmpeg frame extraction failed: {result.stderr}")
+        return []
+
+    # Collect extracted frames with timestamps
+    frames = []
     frame_idx = 0
+    timestamp_ms = start_time_ms
 
     while timestamp_ms < end_time_ms:
-        time_seconds = timestamp_ms / 1000.0
-        frame_path = os.path.join(output_dir, f"frame_{frame_idx:04d}.jpg")
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(time_seconds),
-            "-i",
-            video_path,
-            "-vframes",
-            "1",
-            "-f",
-            "image2",
-            frame_path,
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0 and os.path.exists(frame_path):
+        # ffmpeg uses 1-based numbering for output pattern
+        frame_path = os.path.join(output_dir, f"frame_{frame_idx + 1:04d}.jpg")
+        if os.path.exists(frame_path):
             frames.append((timestamp_ms, frame_path))
-
         timestamp_ms += interval_ms
         frame_idx += 1
 
@@ -417,6 +422,14 @@ async def detect_faces(request: DetectFacesRequest):
     if face_detector is None or not face_detector.is_loaded:
         raise HTTPException(status_code=503, detail="Face detector not loaded")
 
+    total_start = time.time()
+    timing = {
+        "download_video_ms": 0,
+        "download_refs_ms": 0,
+        "frame_extraction_ms": 0,
+        "detection_ms": 0,
+    }
+
     logger.info("=" * 60)
     logger.info("DETECT FACES")
     logger.info("=" * 60)
@@ -426,10 +439,14 @@ async def detect_faces(request: DetectFacesRequest):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "video.mp4")
+
+        # Download video
+        download_start = time.time()
         try:
             await download_file(request.video_url, video_path)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to download video: {e}")
+        timing["download_video_ms"] = int((time.time() - download_start) * 1000)
 
         try:
             video_info = get_video_info(video_path)
@@ -440,6 +457,8 @@ async def detect_faces(request: DetectFacesRequest):
         height = video_info["height"]
         video_duration_ms = video_info["duration_ms"]
 
+        # Load reference images
+        refs_start = time.time()
         face_detector.clear_references()
 
         for char in request.characters:
@@ -448,7 +467,10 @@ async def detect_faces(request: DetectFacesRequest):
                 face_detector.load_reference(char.id, ref_image)
             except Exception as e:
                 logger.warning(f"Failed to load reference for {char.id}: {e}")
+        timing["download_refs_ms"] = int((time.time() - refs_start) * 1000)
 
+        # Extract frames
+        extraction_start = time.time()
         frames_dir = os.path.join(tmpdir, "frames")
         os.makedirs(frames_dir, exist_ok=True)
 
@@ -459,7 +481,10 @@ async def detect_faces(request: DetectFacesRequest):
             request.start_time_ms or 0,
             request.end_time_ms,
         )
+        timing["frame_extraction_ms"] = int((time.time() - extraction_start) * 1000)
 
+        # Run face detection on all frames
+        detection_start = time.time()
         frame_analyses = []
         characters_detected = set()
 
@@ -490,6 +515,14 @@ async def detect_faces(request: DetectFacesRequest):
             frame_analyses.append(
                 FrameAnalysis(timestamp_ms=timestamp_ms, faces=face_results)
             )
+        timing["detection_ms"] = int((time.time() - detection_start) * 1000)
+
+    total_ms = int((time.time() - total_start) * 1000)
+    logger.info(f"  Detection complete in {total_ms}ms")
+    logger.info(f"    Download video: {timing['download_video_ms']}ms")
+    logger.info(f"    Download refs: {timing['download_refs_ms']}ms")
+    logger.info(f"    Frame extraction: {timing['frame_extraction_ms']}ms")
+    logger.info(f"    InsightFace detection: {timing['detection_ms']}ms")
 
     return DetectFacesResponse(
         frames=frame_analyses,
@@ -498,6 +531,13 @@ async def detect_faces(request: DetectFacesRequest):
         sample_fps=request.sample_fps,
         video_duration_ms=video_duration_ms,
         characters_detected=list(characters_detected),
+        timing=DetectionTimingBreakdown(
+            total_ms=total_ms,
+            download_video_ms=timing["download_video_ms"],
+            download_refs_ms=timing["download_refs_ms"],
+            frame_extraction_ms=timing["frame_extraction_ms"],
+            detection_ms=timing["detection_ms"],
+        ),
     )
 
 

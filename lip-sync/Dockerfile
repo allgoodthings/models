@@ -7,7 +7,7 @@
 # Run:
 #   docker run --gpus all -p 8000:8000 lip-sync:latest
 
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 # Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
@@ -42,10 +42,10 @@ WORKDIR /app
 
 # Install PyTorch with CUDA support FIRST (pinned version)
 RUN pip install --no-cache-dir \
-    torch==2.1.2 \
-    torchvision==0.16.2 \
-    torchaudio==2.1.2 \
-    --index-url https://download.pytorch.org/whl/cu121
+    torch==2.5.1 \
+    torchvision==0.20.1 \
+    torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # Install other Python dependencies
 COPY requirements.txt .

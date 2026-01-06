@@ -91,6 +91,16 @@ class DetectFacesRequest(BaseModel):
     )
 
 
+class DetectionTimingBreakdown(BaseModel):
+    """Timing breakdown for face detection."""
+
+    total_ms: int = Field(..., description="Total processing time")
+    download_video_ms: int = Field(..., description="Time to download video")
+    download_refs_ms: int = Field(..., description="Time to download reference images")
+    frame_extraction_ms: int = Field(..., description="Time to extract frames with ffmpeg")
+    detection_ms: int = Field(..., description="Time for InsightFace detection on all frames")
+
+
 class DetectFacesResponse(BaseModel):
     """Face detection response with tracking and metadata."""
 
@@ -104,6 +114,9 @@ class DetectFacesResponse(BaseModel):
     characters_detected: List[str] = Field(
         default_factory=list,
         description="IDs of characters that were matched at least once",
+    )
+    timing: Optional[DetectionTimingBreakdown] = Field(
+        None, description="Processing time breakdown"
     )
 
 
