@@ -125,11 +125,12 @@ jobs:
 
   # ==========================================================================
   # CPU Validation - Full pipeline test on CPU before GPU deployment
+  # Mirrors Docker environment: cloned repos, PYTHONPATH, model weights
   # ==========================================================================
   cpu-validation:
     name: CPU Validation
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: [unit-tests, integration-tests]
     container:
       image: python:3.11  # Full image has gcc/g++ pre-installed
@@ -138,10 +139,31 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
+            ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 git git-lfs
 
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # Clone the same repos that Dockerfile clones
+      - name: Clone MuseTalk repository
+        run: |
+          git clone --depth 1 https://github.com/TMElyralab/MuseTalk.git /app/MuseTalk
+
+      - name: Clone LivePortrait repository
+        run: |
+          git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git /app/LivePortrait
+
+      # Cache model weights between runs
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: |
+            /app/models
+            ~/.cache/huggingface
+            ~/.insightface
+          key: lip-sync-models-v1-${{ hashFiles('lip-sync/scripts/download_models.py') }}
+          restore-keys: |
+            lip-sync-models-v1-
 
       - name: Install PyTorch CPU and dependencies
         working-directory: lip-sync
@@ -150,12 +172,24 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
 
+      # Download model weights (same as Dockerfile)
+      - name: Download model weights
+        working-directory: lip-sync
+        run: |
+          mkdir -p /app/models
+          python scripts/download_models.py --models-dir /app/models
+
       - name: Run CPU validation
         working-directory: lip-sync
         run: |
           python scripts/test-cpu-validation.py --skip-lipsync --verbose
         env:
           CUDA_VISIBLE_DEVICES: ""
+          # Mirror Docker's PYTHONPATH exactly
+          PYTHONPATH: "/app:/app/MuseTalk:/app/LivePortrait:${{ github.workspace }}/lip-sync"
+          MODELS_DIR: "/app/models"
+          MUSETALK_PATH: "/app/MuseTalk"
+          LIVEPORTRAIT_PATH: "/app/LivePortrait"
 
   # ==========================================================================
   # Docker Build - Only after all tests pass
