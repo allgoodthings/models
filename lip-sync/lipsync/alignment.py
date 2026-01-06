@@ -1,10 +1,8 @@
 """
 Face alignment module for lip-sync pipeline.
 
-Based on SieveSync's alignment implementation with modifications for:
-- Target bbox support for multi-face processing
-- Configurable face mesh instances
-- Better error handling
+Uses InsightFace for robust face detection and landmark extraction.
+Supports target bbox for multi-face processing.
 """
 
 import logging
@@ -12,11 +10,12 @@ import os
 import time
 import numpy as np
 import cv2
-import mediapipe as mp
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from insightface.app import FaceAnalysis
 
 logger = logging.getLogger('lipsync.alignment')
 
@@ -32,28 +31,37 @@ class AlignmentMetadata:
 
 class FaceAligner:
     """
-    Face alignment using MediaPipe FaceMesh.
+    Face alignment using InsightFace.
 
     Supports optional target_bbox for multi-face scenarios where
     you want to process a specific face region.
     """
 
-    def __init__(self, max_num_faces: int = 1):
+    _shared_app: Optional[FaceAnalysis] = None
+    _shared_device: Optional[str] = None
+
+    def __init__(self, max_num_faces: int = 1, device: str = "cuda"):
         """
         Initialize face aligner.
 
         Args:
             max_num_faces: Maximum faces to detect. Set > 1 for multi-face.
+            device: Device to run on ('cuda' or 'cpu')
         """
-        logger.debug(f"Initializing FaceAligner with max_num_faces={max_num_faces}")
-        self.face_mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=max_num_faces,
-            min_detection_confidence=0.1,
-            min_tracking_confidence=0.1,
-            refine_landmarks=True,
-        )
-        logger.debug("FaceMesh initialized successfully")
+        self.max_num_faces = max_num_faces
+        self.device = device
+        logger.debug(f"Initializing FaceAligner with max_num_faces={max_num_faces}, device={device}")
+
+        # Use shared InsightFace app to avoid reloading models
+        if FaceAligner._shared_app is None or FaceAligner._shared_device != device:
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == "cuda" else ["CPUExecutionProvider"]
+            FaceAligner._shared_app = FaceAnalysis(name='buffalo_l', providers=providers)
+            FaceAligner._shared_app.prepare(ctx_id=0 if device == "cuda" else -1, det_size=(640, 640))
+            FaceAligner._shared_device = device
+            logger.info(f"InsightFace initialized with providers={providers}")
+
+        self.app = FaceAligner._shared_app
+        logger.debug("FaceAligner initialized successfully")
 
     def get_landmarks(
         self,
@@ -61,14 +69,14 @@ class FaceAligner:
         target_bbox: Optional[Tuple[int, int, int, int]] = None,
     ) -> Optional[np.ndarray]:
         """
-        Get facial landmarks from image.
+        Get facial landmarks from image using InsightFace.
 
         Args:
             image: BGR image
             target_bbox: Optional (x, y, w, h) to focus detection on specific region
 
         Returns:
-            468 facial landmarks as (x, y) coordinates, or None if no face found
+            68 facial landmarks as (x, y) coordinates, or None if no face found
         """
         ih, iw = image.shape[:2]
         logger.debug(f"get_landmarks: image size={iw}x{ih}, target_bbox={target_bbox}")
@@ -84,26 +92,29 @@ class FaceAligner:
 
             crop = image[y1:y2, x1:x2]
             logger.debug(f"  Cropped region: ({x1},{y1}) to ({x2},{y2}), crop size={crop.shape[1]}x{crop.shape[0]}")
-            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-            results = self.face_mesh.process(crop_rgb)
 
-            if not results.multi_face_landmarks:
-                logger.debug("  No face landmarks found in cropped region")
+            faces = self.app.get(crop)
+            if not faces:
+                logger.debug("  No faces found in cropped region")
                 return None
 
-            logger.debug(f"  Found {len(results.multi_face_landmarks)} face(s) in cropped region")
+            logger.debug(f"  Found {len(faces)} face(s) in cropped region")
 
             # Find the face closest to center of target bbox
             target_center = np.array([x + w/2 - x1, y + h/2 - y1])
             best_landmarks = None
             best_distance = float('inf')
 
-            crop_h, crop_w = crop.shape[:2]
-            for face_landmarks in results.multi_face_landmarks:
-                landmarks = np.array([
-                    (int(lm.x * crop_w), int(lm.y * crop_h))
-                    for lm in face_landmarks.landmark
-                ])
+            for face in faces:
+                if not hasattr(face, 'landmark_3d_68') or face.landmark_3d_68 is None:
+                    # Fall back to landmark_2d_106 if available
+                    if hasattr(face, 'landmark_2d_106') and face.landmark_2d_106 is not None:
+                        landmarks = self._convert_106_to_68(face.landmark_2d_106)
+                    else:
+                        continue
+                else:
+                    landmarks = face.landmark_3d_68[:, :2]  # x,y only
+
                 face_center = np.mean(landmarks, axis=0)
                 distance = np.linalg.norm(face_center - target_center)
 
@@ -116,43 +127,91 @@ class FaceAligner:
                 best_landmarks[:, 0] += x1
                 best_landmarks[:, 1] += y1
                 logger.debug(f"  Selected face with distance={best_distance:.2f} from target center")
-                return best_landmarks
+                return best_landmarks.astype(np.int32)
+
             logger.debug("  No suitable face found near target bbox")
             return None
         else:
             # Original behavior - detect in full image
             logger.debug("  Detecting face in full image (no target_bbox)")
-            results = self.face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            if not results.multi_face_landmarks:
-                logger.debug("  No face landmarks found in full image")
+            faces = self.app.get(image)
+
+            if not faces:
+                logger.debug("  No faces found in full image")
                 return None
-            landmarks = results.multi_face_landmarks[0].landmark
+
+            # Select face by max_num_faces setting (use largest face)
+            face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+
+            if hasattr(face, 'landmark_3d_68') and face.landmark_3d_68 is not None:
+                landmarks = face.landmark_3d_68[:, :2]
+            elif hasattr(face, 'landmark_2d_106') and face.landmark_2d_106 is not None:
+                landmarks = self._convert_106_to_68(face.landmark_2d_106)
+            else:
+                logger.debug("  Face found but no landmarks available")
+                return None
+
             logger.debug(f"  Found face with {len(landmarks)} landmarks")
-            return np.array([(int(lm.x * iw), int(lm.y * ih)) for lm in landmarks])
+            return landmarks.astype(np.int32)
+
+    def _convert_106_to_68(self, landmarks_106: np.ndarray) -> np.ndarray:
+        """
+        Convert 106-point landmarks to 68-point DLIB format.
+
+        This is an approximation using the closest matching points.
+        """
+        # Mapping from 106 to 68 (approximate)
+        # Jaw: 0-16
+        jaw_indices = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32]
+        # Left eyebrow: 17-21
+        left_brow_indices = [33, 34, 35, 36, 37]
+        # Right eyebrow: 22-26
+        right_brow_indices = [42, 43, 44, 45, 46]
+        # Nose: 27-35
+        nose_indices = [51, 52, 53, 54, 55, 56, 57, 58, 59]
+        # Left eye: 36-41
+        left_eye_indices = [60, 61, 62, 63, 64, 65]
+        # Right eye: 42-47
+        right_eye_indices = [68, 69, 70, 71, 72, 73]
+        # Outer lip: 48-59
+        outer_lip_indices = [84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95]
+        # Inner lip: 60-67
+        inner_lip_indices = [96, 97, 98, 99, 100, 101, 102, 103]
+
+        all_indices = (jaw_indices + left_brow_indices + right_brow_indices +
+                      nose_indices + left_eye_indices + right_eye_indices +
+                      outer_lip_indices + inner_lip_indices)
+
+        return landmarks_106[all_indices]
 
     def get_transform_params(self, landmarks: np.ndarray) -> np.ndarray:
         """
         Calculate quadrilateral for face alignment.
 
+        Uses 68-point landmark format (DLIB standard):
+        - Left eye: 36, 39 (outer, inner corner)
+        - Right eye: 42, 45 (inner, outer corner)
+        - Mouth: 48, 54 (corners)
+
         Args:
-            landmarks: 468 facial landmarks
+            landmarks: 68 facial landmarks
 
         Returns:
             4x2 array of quad corners for perspective transform
         """
-        # Eye landmarks
-        left_eye = np.mean(landmarks[[33, 133]], axis=0)
-        right_eye = np.mean(landmarks[[362, 263]], axis=0)
+        # Eye landmarks (DLIB 68-point format)
+        left_eye = np.mean(landmarks[[36, 39]], axis=0)  # Left eye center
+        right_eye = np.mean(landmarks[[42, 45]], axis=0)  # Right eye center
         eye_avg = (left_eye + right_eye) * 0.5
         eye_to_eye = right_eye - left_eye
 
         # Mouth landmarks
-        mouth_avg = (landmarks[61] + landmarks[291]) * 0.5
+        mouth_avg = np.mean(landmarks[[48, 54]], axis=0)  # Mouth center
         eye_to_mouth = mouth_avg - eye_avg
 
         # Calculate alignment quad
         x = eye_to_eye - np.flipud(eye_to_mouth) * [-1, 1]
-        x /= np.hypot(*x)
+        x = x / (np.hypot(*x) + 1e-8)
         x *= max(np.hypot(*eye_to_eye) * 2.5, np.hypot(*eye_to_mouth) * 2)
         y = np.flipud(x) * [-1, 1]
         c = eye_avg + eye_to_mouth * 0.1
@@ -218,6 +277,7 @@ def align_video(
     target_bbox: Optional[Tuple[int, int, int, int]] = None,
     smooth_frames: int = 5,
     output_size: int = 512,
+    device: str = "cuda",
 ) -> AlignmentMetadata:
     """
     Align faces in video for lip-sync processing.
@@ -228,6 +288,7 @@ def align_video(
         target_bbox: Optional (x, y, w, h) to focus on specific face
         smooth_frames: Number of frames for temporal smoothing
         output_size: Size of output frames
+        device: Device to use ('cuda' or 'cpu')
 
     Returns:
         AlignmentMetadata with transformation info
@@ -240,10 +301,11 @@ def align_video(
     logger.info(f"  Target bbox: {target_bbox}")
     logger.info(f"  Smooth frames: {smooth_frames}")
     logger.info(f"  Output size: {output_size}x{output_size}")
+    logger.info(f"  Device: {device}")
 
     start_time = time.time()
 
-    aligner = FaceAligner(max_num_faces=5 if target_bbox else 1)
+    aligner = FaceAligner(max_num_faces=5 if target_bbox else 1, device=device)
 
     cap = cv2.VideoCapture(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -284,7 +346,7 @@ def align_video(
 
     # Initialize with average landmarks
     if initial_landmarks:
-        avg_landmarks = np.mean(initial_landmarks, axis=0)
+        avg_landmarks = np.mean(initial_landmarks, axis=0).astype(np.int32)
         for i, frame in enumerate(initial_frames):
             quad = aligner.get_transform_params(avg_landmarks)
             quad_history.append(quad)
@@ -297,7 +359,7 @@ def align_video(
             face_area = cv2.contourArea(face_hull) / (width * height)
             face_areas.append(face_area)
 
-        last_valid_landmarks = avg_landmarks
+        last_valid_landmarks = avg_landmarks.astype(np.float64)
 
     # Process remaining frames
     for frame_num in range(len(initial_frames), total_frames):
@@ -308,22 +370,23 @@ def align_video(
         lm = aligner.get_landmarks(frame, target_bbox)
 
         if lm is not None:
+            lm_float = lm.astype(np.float64)
             if last_valid_landmarks is not None:
-                distance = np.mean(np.linalg.norm(lm - last_valid_landmarks, axis=1))
+                distance = np.mean(np.linalg.norm(lm_float - last_valid_landmarks, axis=1))
                 if distance > landmark_distance_threshold:
                     # Large movement - reset
                     quad = aligner.get_transform_params(lm)
                     last_valid_quad = quad
-                    last_valid_landmarks = lm
+                    last_valid_landmarks = lm_float
                 else:
                     # Smooth transition
                     quad = aligner.get_transform_params(lm)
                     last_valid_quad = 0.8 * last_valid_quad + 0.2 * quad
-                    last_valid_landmarks = 0.8 * last_valid_landmarks + 0.2 * lm
+                    last_valid_landmarks = 0.8 * last_valid_landmarks + 0.2 * lm_float
             else:
                 quad = aligner.get_transform_params(lm)
                 last_valid_quad = quad
-                last_valid_landmarks = lm
+                last_valid_landmarks = lm_float
 
             quad_history.append(last_valid_quad)
             no_face_count = 0
@@ -345,7 +408,7 @@ def align_video(
         if no_face_count < 15 and last_valid_quad is not None:
             aligned_frame, M = aligner.align_face(frame, last_valid_quad, output_size)
             out.write(aligned_frame)
-            transforms.append((M, frame.shape, frame_num, last_valid_landmarks.copy() if last_valid_landmarks is not None else None))
+            transforms.append((M, frame.shape, frame_num, last_valid_landmarks.astype(np.int32).copy() if last_valid_landmarks is not None else None))
         else:
             # Fallback - center crop
             aspect_ratio = width / height
@@ -367,8 +430,8 @@ def align_video(
 
     elapsed = time.time() - start_time
     logger.info(f"  Face detection stats:")
-    logger.info(f"    Frames without landmarks: {frames_without_landmarks}/{total_frames} ({frames_without_landmarks/total_frames*100:.1f}%)")
-    logger.info(f"    Elapsed time: {elapsed:.2f}s ({total_frames/elapsed:.1f} fps)")
+    logger.info(f"    Frames without landmarks: {frames_without_landmarks}/{total_frames} ({frames_without_landmarks/max(total_frames, 1)*100:.1f}%)")
+    logger.info(f"    Elapsed time: {elapsed:.2f}s ({total_frames/max(elapsed, 0.01):.1f} fps)")
 
     # Validate detection rate
     if total_frames > 0 and frames_without_landmarks / total_frames > 0.4:
@@ -489,7 +552,7 @@ def unalign_video(
     out.release()
 
     elapsed = time.time() - start_time
-    logger.info(f"  Elapsed time: {elapsed:.2f}s ({total_frames/elapsed:.1f} fps)")
+    logger.info(f"  Elapsed time: {elapsed:.2f}s ({total_frames/max(elapsed, 0.01):.1f} fps)")
     logger.info(f"  Output saved to: {output_path}")
     logger.info("UNALIGN VIDEO - Complete")
 
@@ -498,6 +561,7 @@ def align_image(
     image: np.ndarray,
     target_bbox: Optional[Tuple[int, int, int, int]] = None,
     output_size: int = 512,
+    device: str = "cuda",
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
     """
     Align a single face in an image.
@@ -506,13 +570,14 @@ def align_image(
         image: BGR image
         target_bbox: Optional region to focus on
         output_size: Size of output
+        device: Device to use ('cuda' or 'cpu')
 
     Returns:
         Tuple of (aligned_image, transform_matrix, landmarks) or (None, None, None)
     """
     logger.debug(f"align_image: image size={image.shape[1]}x{image.shape[0]}, target_bbox={target_bbox}, output_size={output_size}")
 
-    aligner = FaceAligner(max_num_faces=5 if target_bbox else 1)
+    aligner = FaceAligner(max_num_faces=5 if target_bbox else 1, device=device)
     landmarks = aligner.get_landmarks(image, target_bbox)
 
     if landmarks is None:

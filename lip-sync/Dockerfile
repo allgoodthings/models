@@ -14,12 +14,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies
 RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3-pip \
-    python3.10-venv \
-    python3.10-dev \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
     ffmpeg \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -28,20 +27,27 @@ RUN apt-get update && apt-get install -y \
     git-lfs \
     curl \
     wget \
+    cmake \
+    build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Set Python 3.10 as default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
-# Upgrade pip
-RUN python -m pip install --upgrade pip setuptools wheel
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
-# Install PyTorch with CUDA support FIRST (pinned version)
-RUN pip install --no-cache-dir \
+# Clone official repos first (separate layer for caching)
+RUN git clone --depth 1 https://github.com/TMElyralab/MuseTalk.git /app/MuseTalk \
+    && git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git /app/LivePortrait
+
+# Install PyTorch with CUDA support FIRST (pinned version for CUDA 12.4)
+RUN uv pip install --system --no-cache \
     torch==2.5.1 \
     torchvision==0.20.1 \
     torchaudio==2.5.1 \
@@ -49,16 +55,32 @@ RUN pip install --no-cache-dir \
 
 # Install other Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt
 
 # Install face-related packages (after torch is installed)
-RUN pip install --no-cache-dir \
-    mediapipe \
+RUN uv pip install --system --no-cache \
     onnxruntime-gpu \
     basicsr \
     facexlib \
     gfpgan \
     insightface
+
+# Install MuseTalk dependencies from their requirements
+RUN uv pip install --system --no-cache \
+    openai-whisper \
+    einops \
+    diffusers \
+    accelerate \
+    transformers
+
+# Install LivePortrait dependencies
+RUN uv pip install --system --no-cache \
+    tyro \
+    dlib \
+    pyyaml
+
+# Install scikit-image for histogram matching
+RUN uv pip install --system --no-cache scikit-image
 
 # Copy source code
 COPY lipsync/ ./lipsync/
@@ -80,15 +102,29 @@ app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
 app.prepare(ctx_id=-1); \
 print('InsightFace model downloaded successfully')"
 
+# Pre-download Whisper tiny model (~75MB)
+RUN python3 -c "\
+import whisper; \
+print('Downloading Whisper tiny model...'); \
+whisper.load_model('tiny'); \
+print('Whisper model downloaded successfully')"
+
+# Pre-download VAE model
+RUN python3 -c "\
+from diffusers import AutoencoderKL; \
+print('Downloading SD VAE...'); \
+AutoencoderKL.from_pretrained('stabilityai/sd-vae-ft-mse'); \
+print('VAE downloaded successfully')"
+
 # Set environment
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app:/app/MuseTalk:/app/LivePortrait
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_VISIBLE_DEVICES=0
 
 # Model paths
 ENV MODELS_DIR=/app/models
-ENV MUSETALK_PATH=/app/models/musetalk
-ENV LIVEPORTRAIT_PATH=/app/models/liveportrait
+ENV MUSETALK_PATH=/app/MuseTalk
+ENV LIVEPORTRAIT_PATH=/app/LivePortrait
 ENV CODEFORMER_PATH=/app/models/codeformer
 
 # Server port
@@ -97,6 +133,9 @@ EXPOSE 8000
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+# Preload models on startup for faster first request
+ENV PRELOAD_MODELS=true
 
 # Run the server
 CMD ["uvicorn", "lipsync.server.main:app", "--host", "0.0.0.0", "--port", "8000"]
