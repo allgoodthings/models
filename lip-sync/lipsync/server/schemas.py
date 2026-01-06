@@ -3,7 +3,7 @@ Pydantic schemas for lip-sync API.
 """
 
 from typing import List, Optional, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class FaceJobRequest(BaseModel):
@@ -98,9 +98,100 @@ class DetectedFace(BaseModel):
     confidence: float
 
 
+class DetectedFaceAtTime(BaseModel):
+    """Detected face with timestamp."""
+
+    character_id: str
+    bbox: Tuple[int, int, int, int]
+    confidence: float
+    timestamp_ms: int
+
+
+class FrameDetection(BaseModel):
+    """Face detections for a single frame."""
+
+    timestamp_ms: int
+    faces: List[DetectedFace]
+
+
 class DetectFacesResponse(BaseModel):
-    """Face detection response."""
+    """Face detection response (single frame, legacy)."""
 
     faces: List[DetectedFace]
     frame_width: int
     frame_height: int
+
+
+class DetectFacesMultiFrameResponse(BaseModel):
+    """Face detection response with multi-frame tracking."""
+
+    frames: List[FrameDetection]
+    frame_width: int
+    frame_height: int
+    sample_fps: float
+    video_duration_ms: int
+
+
+# URL-based request schemas (JSON API)
+
+class CharacterDefinition(BaseModel):
+    """Character definition for face detection."""
+
+    id: str = Field(..., description="Unique identifier for the character")
+    name: str = Field(..., description="Character name")
+    description: Optional[str] = Field(None, description="Visual description of the character")
+
+
+class DetectFacesUrlRequest(BaseModel):
+    """Face detection request with video URL."""
+
+    video_url: str = Field(
+        ...,
+        description="URL to video file",
+    )
+    sample_fps: float = Field(
+        3.0,
+        description="Frames per second to sample for face detection (e.g., 3 = 3 frames/second)",
+        gt=0.0,
+        le=30.0,
+    )
+    start_time_ms: Optional[int] = Field(
+        None,
+        description="Start time in milliseconds (default: 0)",
+    )
+    end_time_ms: Optional[int] = Field(
+        None,
+        description="End time in milliseconds (default: video duration)",
+    )
+    characters: List[CharacterDefinition] = Field(
+        ...,
+        description="List of characters to detect",
+    )
+
+
+class LipSyncUrlRequest(BaseModel):
+    """Lip-sync request with URLs."""
+
+    video_url: str = Field(
+        ...,
+        description="URL to input video file",
+    )
+    audio_url: str = Field(
+        ...,
+        description="URL to audio file for lip-sync",
+    )
+    faces: List[FaceJobRequest] = Field(
+        ...,
+        description="List of face jobs to process",
+        min_length=1,
+    )
+    enhance_quality: bool = Field(
+        True,
+        description="Apply CodeFormer enhancement after lip-sync",
+    )
+    fidelity_weight: float = Field(
+        0.7,
+        description="CodeFormer fidelity weight (0=quality, 1=fidelity)",
+        ge=0.0,
+        le=1.0,
+    )

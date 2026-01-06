@@ -305,6 +305,45 @@ Detect up to {max_faces} faces. Return ONLY the JSON array, no other text."""
                 print(f"Qwen-VL face detection failed: {e}")
                 raise
 
+    async def detect_characters_multi_frame(
+        self,
+        frames: List[Tuple[int, str]],  # [(timestamp_ms, base64_image), ...]
+        characters: List[Dict],
+        max_concurrent: int = 5,
+    ) -> List[Tuple[int, List[DetectedFace]]]:
+        """
+        Detect characters across multiple frames in parallel.
+
+        Args:
+            frames: List of (timestamp_ms, base64_image) tuples
+            characters: List of character definitions [{id, name, description}]
+            max_concurrent: Maximum concurrent API requests
+
+        Returns:
+            List of (timestamp_ms, detected_faces) tuples
+        """
+        import asyncio
+
+        if not characters or not frames:
+            return []
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def detect_frame(timestamp_ms: int, frame_base64: str):
+            async with semaphore:
+                try:
+                    faces = await self.detect_characters(frame_base64, characters)
+                    return (timestamp_ms, faces)
+                except Exception as e:
+                    print(f"Detection failed for frame at {timestamp_ms}ms: {e}")
+                    return (timestamp_ms, [])
+
+        tasks = [detect_frame(ts, img) for ts, img in frames]
+        results = await asyncio.gather(*tasks)
+
+        # Sort by timestamp
+        return sorted(results, key=lambda x: x[0])
+
 
 async def test_client():
     """Test the Qwen-VL client."""
