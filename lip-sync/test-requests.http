@@ -1,0 +1,55 @@
+### Lip-Sync API Test Requests
+### Base URL
+@baseUrl = https://17guz76pn9v7h3-8000.proxy.runpod.net
+
+### Test Assets
+@refImage = https://replicate.delivery/pbxt/MNRKHnYUu5HjNqEerj2kxWRmUD3xWGaZ0gJmhqVbkra2jCbD/underwater.jpeg
+@videoUrl = https://replicate.delivery/czjl/xFIwsxPXTtpCHJw2WqLH3gqACg3csLVVdKtbLf1heBzXiUJUA/tmp35xuh600.mp4
+@audioUrl = https://replicate.delivery/pbxt/Nl3OAXz8mkiA0KFCoL1m7d6hWdrEGlXjN3hLFPpM7giMlvwi/every-person.mp3
+
+### Health Check
+GET {{baseUrl}}/health
+
+### Root - List Endpoints
+GET {{baseUrl}}/
+
+### Detect Faces
+POST {{baseUrl}}/detect-faces
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "sample_fps": 3,
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5
+}
+
+### Lip-Sync (requires presigned upload URL)
+# Replace YOUR_PRESIGNED_UPLOAD_URL with actual presigned URL
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "https://files.biz.dev.scenema.ai/scenema-ai-dev/admin/2026-01-06/1767733931544-lip-sycn-test?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=minioadmin%2F20260106%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260106T211211Z&X-Amz-Expires=86400&X-Amz-Signature=5abb32651524441d834fc85829eb330d40b82218059cc8279ff28921f4467d76&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-id=PutObject",
+  "faces": [
+    {
+      "character_id": "speaker",
+      "bbox": [100, 50, 200, 250],
+      "start_time_ms": 0,
+      "end_time_ms": 5000
+    }
+  ],
+  "enhance_quality": true,
+  "fidelity_weight": 0.7
+}
+
+
+###https://files.biz.dev.scenema.ai/scenema-ai-dev/admin/2026-01-06/1767733931544-lip-sycn-test?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=minioadmin%2F20260106%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260106T211211Z&X-Amz-Expires=86400&X-Amz-Signature=8032043cf75da7697766407db2005a45fc562ecaee2ad27c09566a31c661a4ec&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject
