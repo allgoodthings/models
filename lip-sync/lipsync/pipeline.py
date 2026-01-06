@@ -113,13 +113,13 @@ class LipSyncPipeline:
         # Initialize models (lazy loading)
         logger.debug("Creating model wrappers (lazy loading)...")
         self.musetalk = MuseTalk(MuseTalkConfig(
-            model_path=self.config.musetalk_path,
+            model_dir=self.config.musetalk_path,
             device=self.config.device,
             fp16=self.config.fp16,
         ))
 
         self.liveportrait = LivePortrait(LivePortraitConfig(
-            model_path=self.config.liveportrait_path,
+            model_dir=self.config.liveportrait_path,
             device=self.config.device,
             fp16=self.config.fp16,
         ))
