@@ -1,91 +1,204 @@
-# Multi-Face Lip-Sync
+# Multi-Face Lip-Sync Pipeline
 
-A multi-face lip-sync pipeline using MuseTalk, LivePortrait, and CodeFormer.
+Local face detection and lip-sync processing using InsightFace + MuseTalk + LivePortrait + CodeFormer.
 
-## Features
+## Architecture
 
-- **Multi-face support**: Process multiple speaking characters in a single video
-- **Targeted face selection**: Use bounding boxes to specify which faces to process
-- **High-quality output**: LivePortrait neutralization + MuseTalk lip-sync + CodeFormer enhancement
-- **Seamless compositing**: Feathered blending for natural results
-- **FastAPI server**: Easy HTTP API for testing and integration
-- **Qwen-VL integration**: Optional character detection via OpenRouter
-
-## Quick Start
-
-### Docker (Recommended)
-
-```bash
-# Pull the image
-docker pull ghcr.io/allgoodthings/lip-sync:latest
-
-# Run with GPU
-docker run --gpus all -p 8000:8000 ghcr.io/allgoodthings/lip-sync:latest
-
-# With Qwen-VL face detection enabled
-docker run --gpus all -p 8000:8000 \
-  -e OPENROUTER_API_KEY=sk-or-... \
-  -e PRELOAD_MODELS=true \
-  ghcr.io/allgoodthings/lip-sync:latest
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CLIENT REQUEST                                  │
+│                                                                             │
+│  Video URL + Audio URL + Character References (with headshot URLs)          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         FACE DETECTION PHASE                                 │
+│                         POST /detect-faces                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────────┐  │
+│  │ Download     │    │ Download     │    │ Extract Frames               │  │
+│  │ Reference    │───▶│ Video        │───▶│ at N FPS                     │  │
+│  │ Images       │    │              │    │ (e.g., 3 frames/sec)         │  │
+│  └──────────────┘    └──────────────┘    └──────────────────────────────┘  │
+│         │                                              │                    │
+│         ▼                                              ▼                    │
+│  ┌──────────────────────┐              ┌──────────────────────────────┐    │
+│  │ INSIGHTFACE          │              │ For Each Frame:              │    │
+│  │ Extract embeddings   │              │                              │    │
+│  │ from headshots       │              │  • Detect all faces          │    │
+│  │ (512-dim vectors)    │              │  • Extract embeddings        │    │
+│  └──────────────────────┘              │  • Get head pose (yaw/pitch) │    │
+│         │                              │  • Get landmarks             │    │
+│         │                              └──────────────────────────────┘    │
+│         │                                              │                    │
+│         └──────────────┬───────────────────────────────┘                    │
+│                        ▼                                                    │
+│              ┌─────────────────────────────────────────┐                    │
+│              │ MATCH & ANALYZE                         │                    │
+│              │                                         │                    │
+│              │ • Compare embeddings (cosine sim >0.5)  │                    │
+│              │ • Assign character IDs or face_1/2/etc  │                    │
+│              │ • Check syncability:                    │                    │
+│              │   - Yaw > 45° → skip (profile)          │                    │
+│              │   - Face < 64px → skip (too small)      │                    │
+│              │   - Low confidence → skip               │                    │
+│              │ • Calculate sync_quality (0-1)          │                    │
+│              └─────────────────────────────────────────┘                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DETECTION RESPONSE                                   │
+│                                                                             │
+│  Per-frame data with syncability metadata:                                  │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ Frame @0ms:    alice bbox=[100,50,200,250] syncable=true  q=0.92   │     │
+│  │                bob   bbox=[400,60,180,220] syncable=false (profile)│     │
+│  │ Frame @333ms:  alice bbox=[102,51,198,248] syncable=true  q=0.90   │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           LIP-SYNC PHASE                                     │
+│                           POST /lipsync                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Input: Video URL + Audio URL + Upload URL + Face configs                   │
+│                                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌────────────┐   │
+│  │  MUSETALK   │    │ LIVEPORTRAIT│    │ COMPOSITOR  │    │ CODEFORMER │   │
+│  │             │    │             │    │             │    │            │   │
+│  │ Audio →     │───▶│ Mouth shape │───▶│ Blend into  │───▶│ Enhance    │   │
+│  │ Lip motion  │    │ animation   │    │ original    │    │ face       │   │
+│  │ features    │    │             │    │ video       │    │ quality    │   │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └────────────┘   │
+│                                                                             │
+│  For each face in faces[]:                                                  │
+│    • Crop face region using bbox                                            │
+│    • Apply lip-sync for time range                                          │
+│    • Composite back into video                                              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              UPLOAD & RESPOND                                │
+│                                                                             │
+│  • Upload MP4 to presigned URL (PUT request)                                │
+│  • Return metadata: duration, dimensions, file size, processing time        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Build from Source
+## Flow Summary
 
-```bash
-# Build the image locally (from the lip-sync directory)
-cd lip-sync
-docker build -t lip-sync:dev .
+| Step | Component | What Happens |
+|------|-----------|--------------|
+| 1 | **Reference Loading** | Download character headshots → InsightFace extracts 512-dim embeddings |
+| 2 | **Frame Sampling** | Download video → Extract frames at N FPS using ffmpeg |
+| 3 | **Face Detection** | InsightFace finds all faces per frame → bboxes, embeddings, head pose |
+| 4 | **Identity Matching** | Compare face embeddings to reference embeddings (cosine similarity) |
+| 5 | **Syncability Check** | Filter faces: skip profiles (yaw>45°), tiny faces (<64px), low quality |
+| 6 | **Lip-Sync** | MuseTalk generates lip motion → LivePortrait animates → Composite into video |
+| 7 | **Enhancement** | CodeFormer upscales/restores face quality |
+| 8 | **Upload** | PUT result to presigned URL, return metadata |
 
-# Run
-docker run --gpus all -p 8000:8000 lip-sync:dev
-```
+## Models & VRAM
 
-### Local Development (No Docker)
-
-```bash
-# Clone the repo
-git clone https://github.com/allgoodthings/models.git
-cd models/lip-sync
-
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -e ".[dev]"
-
-# Download model weights (~7GB)
-python scripts/download_models.py
-
-# Run the server
-uvicorn lipsync.server.main:app --host 0.0.0.0 --port 8000 --reload
-```
+| Model | VRAM | Purpose |
+|-------|------|---------|
+| InsightFace (buffalo_l) | ~500MB | Face detection & embeddings |
+| MuseTalk | ~4GB | Audio-to-lip features |
+| LivePortrait | ~2GB | Face animation |
+| CodeFormer | ~1GB | Face enhancement |
+| **Total** | **~7.5GB** | Fits on RTX 3080+ |
 
 ## API Endpoints
 
-### POST /lipsync
+### `GET /health`
 
-Process multi-face lip-sync on a video. Returns the processed video directly.
+Health check with per-model status.
 
-**Request (multipart/form-data):**
-- `video`: Video file (mp4, mov, etc.)
-- `audio`: Audio file (wav, mp3, etc.)
-- `request`: JSON string with configuration
-
-**Request JSON:**
 ```json
 {
+  "status": "healthy",
+  "insightface_loaded": true,
+  "musetalk_loaded": true,
+  "liveportrait_loaded": true,
+  "codeformer_loaded": true,
+  "gpu_available": true,
+  "gpu_name": "NVIDIA RTX 4090",
+  "gpu_memory_gb": 24.0
+}
+```
+
+### `POST /detect-faces`
+
+Detect and track faces across video frames.
+
+**Request:**
+```json
+{
+  "video_url": "https://example.com/video.mp4",
+  "sample_fps": 3,
+  "characters": [
+    {
+      "id": "alice",
+      "name": "Alice",
+      "reference_image_url": "https://example.com/alice-headshot.jpg"
+    }
+  ],
+  "similarity_threshold": 0.5
+}
+```
+
+**Response:**
+```json
+{
+  "frames": [
+    {
+      "timestamp_ms": 0,
+      "faces": [
+        {
+          "character_id": "alice",
+          "bbox": [100, 50, 200, 250],
+          "confidence": 0.95,
+          "head_pose": [5.2, -12.3, 2.1],
+          "syncable": true,
+          "sync_quality": 0.92,
+          "skip_reason": null
+        }
+      ]
+    }
+  ],
+  "frame_width": 1920,
+  "frame_height": 1080,
+  "sample_fps": 3,
+  "video_duration_ms": 10000,
+  "characters_detected": ["alice"]
+}
+```
+
+### `POST /lipsync`
+
+Process lip-sync and upload result to presigned URL.
+
+**Request:**
+```json
+{
+  "video_url": "https://example.com/video.mp4",
+  "audio_url": "https://example.com/audio.mp3",
+  "upload_url": "https://storage.example.com/presigned-put-url",
   "faces": [
     {
       "character_id": "alice",
       "bbox": [100, 50, 200, 250],
       "start_time_ms": 0,
-      "end_time_ms": 5000
-    },
-    {
-      "character_id": "bob",
-      "bbox": [400, 60, 180, 220],
-      "start_time_ms": 2000,
       "end_time_ms": 5000
     }
   ],
@@ -94,113 +207,65 @@ Process multi-face lip-sync on a video. Returns the processed video directly.
 }
 ```
 
-**Response:** MP4 video bytes (Content-Type: video/mp4)
-
-**Example:**
-```bash
-curl -X POST http://localhost:8000/lipsync \
-  -F "video=@input.mp4" \
-  -F "audio=@speech.wav" \
-  -F 'request={"faces":[{"character_id":"alice","bbox":[100,50,200,250],"start_time_ms":0,"end_time_ms":5000}]}' \
-  --output result.mp4
-```
-
-### POST /lipsync/json
-
-Same as `/lipsync` but returns JSON with base64-encoded video and metadata.
-
 **Response:**
 ```json
 {
   "success": true,
-  "faces_processed": 2,
-  "face_results": [
-    {"character_id": "alice", "success": true},
-    {"character_id": "bob", "success": true}
-  ],
   "processing_time_ms": 45000,
-  "output_url": "data:video/mp4;base64,..."
-}
-```
-
-### POST /detect-faces
-
-Detect character faces in an image using Qwen-VL (requires OPENROUTER_API_KEY).
-
-**Request (multipart/form-data):**
-- `frame`: Image file (jpg, png)
-- `request`: JSON with character definitions
-
-**Request JSON:**
-```json
-{
-  "characters": [
-    {"id": "alice", "name": "Alice", "description": "Woman with red hair"},
-    {"id": "bob", "name": "Bob", "description": "Man with glasses"}
-  ]
-}
-```
-
-**Response:**
-```json
-{
-  "faces": [
-    {"character_id": "alice", "bbox": [100, 50, 200, 250], "confidence": 0.95},
-    {"character_id": "bob", "bbox": [400, 60, 180, 220], "confidence": 0.87}
+  "face_results": [
+    {"character_id": "alice", "success": true}
   ],
-  "frame_width": 1920,
-  "frame_height": 1080
+  "output": {
+    "duration_ms": 5000,
+    "width": 1920,
+    "height": 1080,
+    "file_size_bytes": 2500000,
+    "fps": 30.0
+  }
 }
 ```
 
-### GET /health
+## Quick Start
 
-Health check with GPU info.
+### Docker
 
-**Response:**
-```json
-{
-  "status": "healthy",
-  "models_loaded": true,
-  "gpu_available": true,
-  "gpu_name": "NVIDIA RTX 4090",
-  "gpu_memory_gb": 24.0
-}
+```bash
+# Build
+docker build -t lip-sync:latest .
+
+# Run
+docker run --gpus all -p 8000:8000 lip-sync:latest
 ```
 
-### GET /
+### Local Development
 
-API info and available endpoints.
+```bash
+# Install dependencies
+pip install -e ".[dev]"
 
-## Architecture
+# Download models
+python scripts/download_models.py --models-dir ./models
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    LipSyncPipeline                       │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. Extract frames at target bbox regions                │
-│  2. Align faces (MediaPipe landmarks)                    │
-│  3. Neutralize expressions (LivePortrait)                │
-│  4. Generate lip-sync (MuseTalk)                         │
-│  5. Enhance quality (CodeFormer)                         │
-│  6. Composite back with feathered blending               │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
+# Run server
+MODELS_DIR=./models uvicorn lipsync.server.main:app --reload
 ```
 
-## GPU Requirements
+## Testing
 
-- **Minimum**: RTX 3090 (24GB) or RTX 4090 (24GB)
-- **VRAM Usage**: ~9GB per concurrent job
+```bash
+# Auto-detect faces and process
+node scripts/test-api.mjs \
+  --video https://example.com/video.mp4 \
+  --audio https://example.com/audio.mp3 \
+  --auto
 
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENROUTER_API_KEY` | API key for Qwen-VL face detection | - |
-| `CUDA_VISIBLE_DEVICES` | GPU device(s) to use | `0` |
-| `LOG_LEVEL` | Logging level | `INFO` |
+# With character references for identity matching
+node scripts/test-api.mjs \
+  --video https://example.com/video.mp4 \
+  --audio https://example.com/audio.mp3 \
+  --refs characters.json \
+  --auto
+```
 
 ## License
 

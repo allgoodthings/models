@@ -2,24 +2,30 @@
 FastAPI server for multi-face lip-sync.
 """
 
+from .insightface_detector import InsightFaceDetector
 from .main import app
 from .schemas import (
-    LipSyncRequest,
-    LipSyncResponse,
-    FaceJobRequest,
+    CharacterReference,
+    DetectedFaceWithMetadata,
     DetectFacesRequest,
     DetectFacesResponse,
+    FaceJobRequest,
+    FrameAnalysis,
     HealthResponse,
+    LipSyncRequest,
+    LipSyncResponse,
 )
-from .qwen_client import QwenVLClient
 
 __all__ = [
     "app",
-    "LipSyncRequest",
-    "LipSyncResponse",
-    "FaceJobRequest",
+    "InsightFaceDetector",
+    "CharacterReference",
+    "DetectedFaceWithMetadata",
     "DetectFacesRequest",
     "DetectFacesResponse",
+    "FaceJobRequest",
+    "FrameAnalysis",
     "HealthResponse",
-    "QwenVLClient",
+    "LipSyncRequest",
+    "LipSyncResponse",
 ]
