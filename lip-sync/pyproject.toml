@@ -46,7 +46,6 @@ dependencies = [
     "einops>=0.7.0",
     # LivePortrait dependencies
     "pyyaml>=6.0.0",
-    "dlib>=19.24.0",
     "tyro>=0.7.0",
     # Image processing
     "scikit-image>=0.21.0",
