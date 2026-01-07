@@ -153,7 +153,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git /app/LivePortrait
 
-      # Cache model weights between runs
+      # Cache model weights between runs (bump version to invalidate old cache)
       - name: Cache model weights
         uses: actions/cache@v4
         with:
@@ -161,9 +161,9 @@ jobs:
             /app/models
             ~/.cache/huggingface
             ~/.insightface
-          key: lip-sync-models-v1-${{ hashFiles('lip-sync/scripts/download_models.py') }}
+          key: lip-sync-models-v2-${{ hashFiles('lip-sync/scripts/download_models.py') }}
           restore-keys: |
-            lip-sync-models-v1-
+            lip-sync-models-v2-
 
       - name: Install PyTorch CPU and dependencies
         working-directory: lip-sync
@@ -182,10 +182,23 @@ jobs:
       # Create symlinks so LivePortrait/MuseTalk find weights in expected locations
       - name: Create model symlinks
         run: |
+          # Debug: show what we downloaded
+          echo "=== Downloaded model structure ==="
+          ls -la /app/models/
+          ls -la /app/models/liveportrait/ || true
+          ls -la /app/models/liveportrait/liveportrait/ || true
+
           # LivePortrait expects weights in repo/pretrained_weights/
           ln -sf /app/models/liveportrait /app/LivePortrait/pretrained_weights
           # MuseTalk expects weights in repo/models/
           ln -sf /app/models/musetalk /app/MuseTalk/models
+
+          # Debug: verify symlinks
+          echo "=== Symlink verification ==="
+          ls -la /app/LivePortrait/pretrained_weights
+          ls -la /app/LivePortrait/pretrained_weights/liveportrait/ || true
+          echo "=== Looking for landmark.onnx ==="
+          find /app/models -name "landmark.onnx" 2>/dev/null || echo "landmark.onnx not found"
 
       - name: Run CPU validation
         working-directory: lip-sync

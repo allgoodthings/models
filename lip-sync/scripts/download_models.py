@@ -170,6 +170,7 @@ def verify_downloads(target_dir: str) -> bool:
         ("liveportrait/liveportrait/base_models/spade_generator.pth", "LivePortrait G"),
         ("liveportrait/liveportrait/base_models/warping_module.pth", "LivePortrait W"),
         ("liveportrait/liveportrait/retargeting_models/stitching_retargeting_module.pth", "LivePortrait S"),
+        ("liveportrait/liveportrait/landmark.onnx", "LivePortrait landmark ONNX"),
         # CodeFormer
         ("codeformer/codeformer.pth", "CodeFormer weights"),
     ]
