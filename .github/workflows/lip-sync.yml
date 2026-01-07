@@ -139,7 +139,8 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 git git-lfs
+            ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 git git-lfs \
+            build-essential g++
 
       - name: Checkout code
         uses: actions/checkout@v4
