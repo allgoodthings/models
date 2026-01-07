@@ -125,29 +125,8 @@ class DetectFacesResponse(BaseModel):
 # =============================================================================
 
 
-class FaceJobRequest(BaseModel):
-    """Single face lip-sync job definition."""
-
-    character_id: str = Field(
-        ..., description="Unique identifier for the character/face"
-    )
-    bbox: Tuple[int, int, int, int] = Field(
-        ..., description="Bounding box (x, y, width, height) for the face"
-    )
-    audio_url: Optional[str] = Field(
-        None,
-        description="URL to audio file for this face (if separate from main audio)",
-    )
-    start_time_ms: int = Field(
-        0, description="Start time in milliseconds for this face's lip-sync"
-    )
-    end_time_ms: int = Field(
-        ..., description="End time in milliseconds for this face's lip-sync"
-    )
-
-
 class LipSyncRequest(BaseModel):
-    """Lip-sync request with URLs."""
+    """Lip-sync request - detection happens automatically."""
 
     video_url: str = Field(..., description="URL to input video file")
     audio_url: str = Field(..., description="URL to audio file for lip-sync")
@@ -155,8 +134,22 @@ class LipSyncRequest(BaseModel):
         ...,
         description="Presigned URL for uploading the output video (PUT request)",
     )
-    faces: List[FaceJobRequest] = Field(
-        ..., description="List of face jobs to process", min_length=1
+    characters: List[CharacterReference] = Field(
+        ...,
+        description="Characters to lip-sync with reference images for face matching",
+        min_length=1,
+    )
+    start_time_ms: Optional[int] = Field(
+        None, description="Start time in milliseconds (default: 0)"
+    )
+    end_time_ms: Optional[int] = Field(
+        None, description="End time in milliseconds (default: video duration)"
+    )
+    similarity_threshold: float = Field(
+        0.5,
+        description="Cosine similarity threshold for face matching (0-1)",
+        ge=0.0,
+        le=1.0,
     )
     enhance_quality: bool = Field(
         True, description="Apply CodeFormer enhancement after lip-sync"

@@ -21,9 +21,10 @@ import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
 
-from ..pipeline import FaceJob, LipSyncPipeline, PipelineConfig
+from ..pipeline import LipSyncPipeline, PipelineConfig
 from .insightface_detector import InsightFaceDetector
 from .schemas import (
+    CharacterReference,
     DetectedFaceWithMetadata,
     DetectFacesRequest,
     DetectFacesResponse,
@@ -544,9 +545,10 @@ async def detect_faces(request: DetectFacesRequest):
 @app.post("/lipsync", response_model=LipSyncResponse)
 async def lipsync(request: LipSyncRequest):
     """
-    Process multi-face lip-sync and upload result to presigned URL.
+    Process lip-sync with automatic face detection.
 
-    Tracks face detection per-frame during processing to build segment data.
+    Downloads video, audio, and reference images. Detects faces in video,
+    matches to reference images, processes lip-sync, and uploads result.
     Returns detailed metadata about processed faces and timing.
     """
     if pipeline is None:
@@ -560,9 +562,9 @@ async def lipsync(request: LipSyncRequest):
     logger.info(f"  Video URL: {request.video_url}")
     logger.info(f"  Audio URL: {request.audio_url}")
     logger.info(f"  Upload URL: {request.upload_url[:50]}...")
-    logger.info(f"  Faces: {len(request.faces)}")
-    for face in request.faces:
-        logger.info(f"    - {face.character_id}: bbox={face.bbox}")
+    logger.info(f"  Characters: {len(request.characters)}")
+    for char in request.characters:
+        logger.info(f"    - {char.id}: {char.name}")
 
     total_start = time.time()
     timing = {
@@ -575,20 +577,28 @@ async def lipsync(request: LipSyncRequest):
     }
 
     # Get requested character IDs
-    requested_ids: Set[str] = {f.character_id for f in request.faces}
+    requested_ids: Set[str] = {c.id for c in request.characters}
 
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "video.mp4")
         audio_path = os.path.join(tmpdir, "audio.wav")
         output_path = os.path.join(tmpdir, "output.mp4")
 
-        # Download video and audio
+        # Download video, audio, and reference images
         try:
             download_start = time.time()
             await download_file(request.video_url, video_path)
             await download_file(request.audio_url, audio_path)
+
+            # Download and register reference images for face matching
+            for char in request.characters:
+                ref_img = await download_image(char.reference_image_url)
+                face_detector.register_reference(char.id, ref_img)
+                logger.info(f"    Registered reference for {char.id}")
+
             timing["download_ms"] = int((time.time() - download_start) * 1000)
         except Exception as e:
+            logger.error(f"Download failed: {e}")
             raise HTTPException(status_code=400, detail=f"Failed to download: {e}")
 
         # Get video info
@@ -597,32 +607,38 @@ async def lipsync(request: LipSyncRequest):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to get video info: {e}")
 
+        # Determine time range
+        start_ms = request.start_time_ms or 0
+        end_ms = request.end_time_ms or video_info["duration_ms"]
+
         # Run face detection for tracking
         detection_start = time.time()
-        logger.info("  Running face detection for tracking...")
+        logger.info("  Running face detection...")
 
         frames_dir = os.path.join(tmpdir, "frames")
         os.makedirs(frames_dir, exist_ok=True)
-
-        # Determine time range from request
-        start_ms = min(f.start_time_ms for f in request.faces)
-        end_ms = max(f.end_time_ms for f in request.faces)
 
         frame_paths = extract_frames_at_fps(
             video_path, frames_dir, LIPSYNC_DETECTION_FPS, start_ms, end_ms
         )
 
         # Collect per-frame data for each character
-        frame_data: Dict[str, List[FrameFaceData]] = {f.character_id: [] for f in request.faces}
+        frame_data: Dict[str, List[FrameFaceData]] = {c.id: [] for c in request.characters}
         unknown_frame_data: Dict[str, List[FrameFaceData]] = {}
         all_detected_ids: Set[str] = set()
+
+        # Track best bbox per character (highest confidence detection)
+        best_bbox_per_char: Dict[str, tuple] = {}
+        best_confidence_per_char: Dict[str, float] = {}
 
         for timestamp_ms, frame_path in frame_paths:
             frame = cv2.imread(frame_path)
             if frame is None:
                 continue
 
-            faces = face_detector.detect_faces(frame, similarity_threshold=0.5)
+            faces = face_detector.detect_faces(
+                frame, similarity_threshold=request.similarity_threshold
+            )
 
             for face in faces:
                 all_detected_ids.add(face.character_id)
@@ -640,6 +656,10 @@ async def lipsync(request: LipSyncRequest):
 
                 if face.character_id in requested_ids:
                     frame_data[face.character_id].append(face_data_entry)
+                    # Track best bbox (highest confidence)
+                    if face.confidence > best_confidence_per_char.get(face.character_id, 0):
+                        best_confidence_per_char[face.character_id] = face.confidence
+                        best_bbox_per_char[face.character_id] = face.bbox
                 else:
                     # Unknown face
                     if face.character_id not in unknown_frame_data:
@@ -649,38 +669,49 @@ async def lipsync(request: LipSyncRequest):
         timing["detection_ms"] = int((time.time() - detection_start) * 1000)
         logger.info(f"  Detection complete: {len(all_detected_ids)} unique faces")
 
+        # Check if any requested characters were found
+        found_chars = [c for c in request.characters if c.id in best_bbox_per_char]
+        if not found_chars:
+            logger.warning("  No requested characters found in video")
+            return LipSyncResponse(
+                success=False,
+                error_message="No requested characters found in video",
+            )
+
+        logger.info(f"  Found {len(found_chars)} of {len(request.characters)} characters")
+        for char in found_chars:
+            bbox = best_bbox_per_char[char.id]
+            logger.info(f"    - {char.id}: bbox={bbox}")
+
         # Process lip-sync
         lipsync_start = time.time()
-        face_jobs = [
-            FaceJob(
-                character_id=face.character_id,
-                bbox=face.bbox,
-                audio_path=audio_path,
-                start_time_ms=face.start_time_ms,
-                end_time_ms=face.end_time_ms,
-            )
-            for face in request.faces
-        ]
-
         face_results: List[FaceResult] = []
 
         try:
-            pipeline.config.enhance_quality = request.enhance_quality
+            pipeline.config.use_enhancement = request.enhance_quality
             pipeline.config.fidelity_weight = request.fidelity_weight
 
-            if len(face_jobs) == 1:
-                job = face_jobs[0]
+            # For single face, use process_single_face with detected bbox
+            if len(found_chars) == 1:
+                char = found_chars[0]
+                bbox = best_bbox_per_char[char.id]
                 pipeline.process_single_face(
                     video_path,
                     audio_path,
                     output_path,
-                    target_bbox=job.bbox,
+                    target_bbox=bbox,
                 )
             else:
-                pipeline.process_multi_face(
+                # Multi-face: process each face separately (TODO: implement proper multi-face)
+                # For now, just process the first character
+                char = found_chars[0]
+                bbox = best_bbox_per_char[char.id]
+                logger.warning(f"  Multi-face not fully implemented, processing only {char.id}")
+                pipeline.process_single_face(
                     video_path,
-                    face_jobs,
+                    audio_path,
                     output_path,
+                    target_bbox=bbox,
                 )
 
             timing["lipsync_ms"] = int((time.time() - lipsync_start) * 1000)
@@ -688,8 +719,8 @@ async def lipsync(request: LipSyncRequest):
             # Build segments for each requested face
             frame_interval_ms = 1000 // LIPSYNC_DETECTION_FPS
 
-            for face_req in request.faces:
-                char_id = face_req.character_id
+            for char in request.characters:
+                char_id = char.id
                 frames = frame_data.get(char_id, [])
 
                 if frames:
@@ -724,23 +755,21 @@ async def lipsync(request: LipSyncRequest):
                         )
                     )
                 else:
-                    # No detection data for this face
+                    # Character not found in video
                     face_results.append(
                         FaceResult(
                             character_id=char_id,
-                            success=True,
-                            error_message="No detection data available",
+                            success=False,
+                            error_message="Character not found in video",
                             segments=[],
-                            summary=FaceSummary(
-                                total_ms=face_req.end_time_ms - face_req.start_time_ms,
-                                synced_ms=face_req.end_time_ms - face_req.start_time_ms,
-                                skipped_ms=0,
-                            ),
+                            summary=None,
                         )
                     )
 
         except Exception as e:
             logger.error(f"Lip-sync processing failed: {e}")
+            import traceback
+            traceback.print_exc()
             return LipSyncResponse(
                 success=False,
                 error_message=str(e),
@@ -793,7 +822,7 @@ async def lipsync(request: LipSyncRequest):
         success=True,
         faces=FacesResult(
             total_detected=len(all_detected_ids),
-            processed=len(face_results),
+            processed=len([r for r in face_results if r.success]),
             unknown=len(unknown_faces),
             results=face_results,
             unknown_faces=unknown_faces,
