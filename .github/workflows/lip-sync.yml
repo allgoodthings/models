@@ -179,6 +179,14 @@ jobs:
           mkdir -p /app/models
           python scripts/download_models.py --models-dir /app/models
 
+      # Create symlinks so LivePortrait/MuseTalk find weights in expected locations
+      - name: Create model symlinks
+        run: |
+          # LivePortrait expects weights in repo/pretrained_weights/
+          ln -sf /app/models/liveportrait /app/LivePortrait/pretrained_weights
+          # MuseTalk expects weights in repo/models/
+          ln -sf /app/models/musetalk /app/MuseTalk/models
+
       - name: Run CPU validation
         working-directory: lip-sync
         run: |

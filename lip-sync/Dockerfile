@@ -124,6 +124,12 @@ RUN if [ "$SKIP_MODEL_DOWNLOAD" = "false" ]; then \
     python scripts/download_models.py --models-dir /app/models; \
     fi
 
+# Create symlinks so LivePortrait/MuseTalk find weights in expected locations
+# LivePortrait expects: /app/LivePortrait/pretrained_weights/liveportrait/
+# MuseTalk expects: /app/MuseTalk/models/
+RUN ln -sf /app/models/liveportrait /app/LivePortrait/pretrained_weights && \
+    ln -sf /app/models/musetalk /app/MuseTalk/models
+
 # Pre-download InsightFace buffalo_l model (~500MB)
 # This ensures the model is cached and ready at startup
 RUN python3 -c "\
@@ -133,11 +139,11 @@ app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
 app.prepare(ctx_id=-1); \
 print('InsightFace model downloaded successfully')"
 
-# Pre-download Whisper tiny model (~75MB)
+# Pre-download Whisper small model (~461MB) for better lip-sync quality
 RUN python3 -c "\
 import whisper; \
-print('Downloading Whisper tiny model...'); \
-whisper.load_model('tiny'); \
+print('Downloading Whisper small model...'); \
+whisper.load_model('small'); \
 print('Whisper model downloaded successfully')"
 
 # Pre-download VAE model from HuggingFace
