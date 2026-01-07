@@ -133,10 +133,15 @@ class LivePortrait:
                 if retarget_models.exists():
                     inference_cfg.checkpoint_S = str(retarget_models / "stitching_retargeting_module.pth")
 
-            # Create crop config
+            # Create crop config with explicit paths
+            # (default paths are relative to LivePortrait repo, we need absolute paths to our models)
+            landmark_path = model_dir / "liveportrait" / "landmark.onnx"
+            insightface_root = model_dir / "liveportrait" / "insightface"
             crop_cfg = CropConfig(
                 device_id=self.config.device_id if self.device.type == 'cuda' else -1,
                 flag_force_cpu=self.device.type != 'cuda',
+                landmark_ckpt_path=str(landmark_path),
+                insightface_root=str(insightface_root),
             )
 
             # Initialize pipeline
