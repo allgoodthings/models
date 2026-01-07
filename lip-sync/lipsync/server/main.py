@@ -347,7 +347,7 @@ async def lifespan(app: FastAPI):
         codeformer_path=os.path.join(MODELS_DIR, "codeformer"),
         device=device,
         fp16=device == "cuda",
-        enhance_quality=True,
+        use_enhancement=True,
     )
     pipeline = LipSyncPipeline(config)
 
