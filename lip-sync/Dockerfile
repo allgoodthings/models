@@ -94,7 +94,8 @@ RUN uv pip install --system --no-cache \
     basicsr>=1.4.2 \
     facexlib>=0.3.0 \
     gfpgan>=1.3.8 \
-    insightface>=0.7.3
+    insightface>=0.7.3 \
+    lpips>=0.1.4
 
 # Install Whisper for audio feature extraction
 RUN uv pip install --system --no-cache openai-whisper>=20231117
