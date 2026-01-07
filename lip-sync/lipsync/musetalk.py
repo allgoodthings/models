@@ -26,9 +26,12 @@ import time
 import torch
 import numpy as np
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 import cv2
+
+if TYPE_CHECKING:
+    from .cache import FaceCache
 
 logger = logging.getLogger('lipsync.musetalk')
 
@@ -53,6 +56,8 @@ class MuseTalkConfig:
     # Whisper model for audio features: tiny, base, small, medium, large
     # Larger = better lip-sync quality but slower inference
     whisper_model: str = "small"
+    # Enable caching for face references (significant speedup for repeated faces)
+    use_cache: bool = True
 
 
 class MuseTalk:
@@ -63,7 +68,7 @@ class MuseTalk:
     with a single UNet step, conditioned on Whisper audio features.
     """
 
-    def __init__(self, config: Optional[MuseTalkConfig] = None):
+    def __init__(self, config: Optional[MuseTalkConfig] = None, cache: Optional["FaceCache"] = None):
         self.config = config or MuseTalkConfig()
         self.device = torch.device(self.config.device if torch.cuda.is_available() else "cpu")
         self._loaded = False
@@ -74,7 +79,12 @@ class MuseTalk:
         self.audio_processor = None
         self.timesteps = None
 
+        # Optional cache for face references and audio features
+        self.cache = cache
+
         logger.info(f"MuseTalk initialized with device={self.device}, version={self.config.version}")
+        if cache:
+            logger.info("  Face caching enabled")
 
     def load(self) -> None:
         """Load model weights using official MuseTalk loaders."""
@@ -231,24 +241,45 @@ class MuseTalk:
             if not frames:
                 raise ValueError("No frames read from video")
 
-            # Extract audio features using Whisper
-            # audio2feat(audio_path) -> numpy array
-            logger.info("  Extracting audio features...")
-            whisper_feature = self.audio_processor.audio2feat(audio_path)
+            # Extract audio features using Whisper (with optional caching)
+            cached_audio = self.cache.get_audio(audio_path) if self.cache else None
 
-            # feature2chunks(feature_array, fps, audio_feat_length=[2,2]) -> list
-            whisper_chunks = self.audio_processor.feature2chunks(
-                feature_array=whisper_feature,
-                fps=fps,
-                audio_feat_length=[2, 2],
-            )
+            if cached_audio and cached_audio.chunks is not None and cached_audio.fps == fps:
+                logger.info("  Using cached audio features (HIT)")
+                whisper_chunks = cached_audio.chunks.cpu().numpy()
+                whisper_chunks = [whisper_chunks[i] for i in range(whisper_chunks.shape[0])]
+            else:
+                logger.info("  Extracting audio features...")
+                whisper_feature = self.audio_processor.audio2feat(audio_path)
+
+                # feature2chunks(feature_array, fps, audio_feat_length=[2,2]) -> list
+                whisper_chunks = self.audio_processor.feature2chunks(
+                    feature_array=whisper_feature,
+                    fps=fps,
+                    audio_feat_length=[2, 2],
+                )
+
+                # Cache the audio features
+                if self.cache:
+                    chunks_tensor = torch.stack([
+                        torch.from_numpy(c).float() if isinstance(c, np.ndarray) else c
+                        for c in whisper_chunks
+                    ])
+                    self.cache.put_audio(
+                        audio_path=audio_path,
+                        features=torch.from_numpy(whisper_feature),
+                        duration=len(frames) / fps,
+                        fps=fps,
+                        chunks=chunks_tensor,
+                    )
+
             logger.info(f"  Audio chunks: {len(whisper_chunks)}")
 
-            # Prepare face crops and latents
-            logger.info("  Encoding frames to latent space...")
-            input_latent_list = []
+            # Prepare face crops and encode to latent space
+            logger.info("  Preparing face crops...")
             coord_list = []
             frame_list = []
+            face_crops_rgb = []
 
             for i, frame in enumerate(frames):
                 h, w = frame.shape[:2]
@@ -270,15 +301,12 @@ class MuseTalk:
                 y1, x1, y2, x2 = coord
                 face_crop = frame[y1:y2, x1:x2]
                 face_crop = cv2.resize(face_crop, (256, 256))
-
-                # VAE.encode_latents expects tensor, VAE handles conversion internally
-                # But we need to prepare input correctly
-                # The VAE.preprocess_img handles loading from path, so we'll encode directly
                 face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-                latent = self._encode_frame(face_rgb)
-                input_latent_list.append(latent)
+                face_crops_rgb.append(face_rgb)
 
-            input_latents = torch.cat(input_latent_list, dim=0)
+            # Batch encode all frames to latent space
+            logger.info(f"  Batch encoding {len(face_crops_rgb)} frames to latent space...")
+            input_latents = self._encode_frames_batched(face_crops_rgb, batch_size=16)
 
             # Prepare masked latents for UNet inpainting
             # MuseTalk masks the lower half of the face for lip region
@@ -302,8 +330,8 @@ class MuseTalk:
                 for c in whisper_chunks
             ]).to(self.device)
 
-            # Process in batches
-            output_frames = []
+            # Process in batches - UNet inference
+            all_pred_latents = []
             for i in range(0, num_frames, self.config.batch_size):
                 end_idx = min(i + self.config.batch_size, num_frames)
                 batch_size = end_idx - i
@@ -330,12 +358,12 @@ class MuseTalk:
                             encoder_hidden_states=audio_feature,
                         ).sample
 
-                # Decode latents to images
-                for j in range(pred.shape[0]):
-                    latent = pred[j:j+1]
-                    # decode_latents returns BGR image 0-255 uint8
-                    frame_out = self.vae.decode_latents(latent)
-                    output_frames.append(frame_out)
+                all_pred_latents.append(pred)
+
+            # Concatenate all predicted latents and batch decode
+            pred_latents = torch.cat(all_pred_latents, dim=0)
+            logger.info(f"  Batch decoding {pred_latents.shape[0]} latents to images...")
+            output_frames = self._decode_latents_batched(pred_latents, batch_size=16)
 
             # Composite back into original frames
             logger.info("  Compositing output...")
@@ -429,6 +457,90 @@ class MuseTalk:
         combined = torch.cat([masked_latents, latents], dim=1)
 
         return combined
+
+    def _encode_frames_batched(
+        self,
+        frames_rgb: List[np.ndarray],
+        batch_size: int = 16,
+    ) -> torch.Tensor:
+        """
+        Batch-encode multiple frames to latent space.
+
+        Args:
+            frames_rgb: List of RGB images (256x256)
+            batch_size: Number of frames per batch
+
+        Returns:
+            Latent tensor [N, 4, 32, 32]
+        """
+        all_latents = []
+
+        for i in range(0, len(frames_rgb), batch_size):
+            batch = frames_rgb[i:i + batch_size]
+
+            # Stack frames [B, 3, 256, 256]
+            tensors = []
+            for frame in batch:
+                t = torch.from_numpy(frame).float() / 255.0
+                t = (t - 0.5) / 0.5  # [-1, 1]
+                t = t.permute(2, 0, 1)  # HWC -> CHW
+                tensors.append(t)
+
+            batch_tensor = torch.stack(tensors).to(self.device)
+            if self.config.fp16:
+                batch_tensor = batch_tensor.half()
+
+            with torch.no_grad():
+                # VAE.encode_latents supports batch [B, 3, H, W] -> [B, 4, H/8, W/8]
+                latents = self.vae.encode_latents(batch_tensor)
+
+            all_latents.append(latents)
+
+        return torch.cat(all_latents, dim=0)
+
+    def _decode_latents_batched(
+        self,
+        latents: torch.Tensor,
+        batch_size: int = 16,
+    ) -> List[np.ndarray]:
+        """
+        Batch-decode latents to images.
+
+        Args:
+            latents: Latent tensor [N, 4, 32, 32]
+            batch_size: Number of frames per batch
+
+        Returns:
+            List of BGR images (uint8)
+        """
+        output_frames = []
+
+        for i in range(0, latents.shape[0], batch_size):
+            batch = latents[i:i + batch_size]
+
+            with torch.no_grad():
+                # decode_latents supports batch [B, 4, H, W] -> BGR images
+                frames = self.vae.decode_latents(batch)
+
+            # Handle output format - may be tensor or numpy
+            if isinstance(frames, torch.Tensor):
+                frames = frames.cpu().numpy()
+
+            # Handle different output shapes
+            if len(frames.shape) == 4:
+                # [B, H, W, C] or [B, C, H, W]
+                if frames.shape[1] == 3:
+                    # CHW format - transpose to HWC
+                    frames = frames.transpose(0, 2, 3, 1)
+                for j in range(frames.shape[0]):
+                    output_frames.append(frames[j])
+            else:
+                # Single frame case
+                if frames.shape[0] == 3:
+                    frames = frames.transpose(1, 2, 0)
+                output_frames.append(frames)
+
+        return output_frames
 
     @property
     def is_loaded(self) -> bool:

@@ -60,6 +60,7 @@ class LivePortraitConfig:
     device_id: int = 0
     fp16: bool = True
     output_size: int = 512
+    batch_size: int = 8  # 8 frames @ 256x256 ≈ 1GB VRAM
 
 
 class LivePortrait:
@@ -229,78 +230,84 @@ class LivePortrait:
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
             logger.info(f"  Video: {width}x{height} @ {fps:.2f}fps, {frame_count} frames")
+            logger.info(f"  Batch size: {self.config.batch_size}")
 
             # Calculate frame range
             start_frame = int(start_time * fps) if start_time else 0
             end_frame = int(end_time * fps) if end_time else frame_count
 
-            # Read first frame for source features
-            ret, first_frame = cap.read()
-            if not ret:
-                raise ValueError("Could not read first frame")
+            # Read all frames into memory
+            frames_bgr = []
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames_bgr.append(frame)
+            cap.release()
 
-            # Convert BGR to RGB for processing
-            first_frame_rgb = cv2.cvtColor(first_frame, cv2.COLOR_BGR2RGB)
+            if not frames_bgr:
+                raise ValueError("Could not read any frames")
+
+            logger.info(f"  Loaded {len(frames_bgr)} frames")
+
+            # Convert first frame for source features
+            first_frame_rgb = cv2.cvtColor(frames_bgr[0], cv2.COLOR_BGR2RGB)
 
             # Get source info (identity features from first frame)
             source_info = self._extract_source_info(first_frame_rgb)
 
             if source_info is None:
                 logger.warning("No face detected in first frame, copying video unchanged")
-                cap.release()
                 import shutil
                 shutil.copy(video_path, output_path)
                 return output_path
 
-            # Reset video position
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            # Convert frames to RGB for processing range
+            frames_to_process = []
+            frames_indices = []
+            for idx, frame in enumerate(frames_bgr):
+                if start_frame <= idx < end_frame:
+                    frames_to_process.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    frames_indices.append(idx)
 
-            # Setup output video writer
+            # Batch process frames
+            logger.info(f"  Batch processing {len(frames_to_process)} frames...")
+            processed_frames_rgb = self._process_frames_batched(
+                frames_to_process, source_info, lip_ratio, calc_lip_close_ratio
+            )
+
+            # Build output frames
+            output_frames = list(frames_bgr)  # Copy original frames
+            for i, idx in enumerate(frames_indices):
+                output_frames[idx] = cv2.cvtColor(processed_frames_rgb[i], cv2.COLOR_RGB2BGR)
+
+            # Write output video
+            logger.info("  Writing output video...")
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-            # Process all frames
-            processed = 0
-            frame_idx = 0
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            for frame in output_frames:
+                out.write(frame)
 
-                # Check if frame is in processing range
-                if start_frame <= frame_idx < end_frame:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    neutralized_rgb = self._process_frame(
-                        frame_rgb, source_info, lip_ratio, calc_lip_close_ratio
-                    )
-                    neutralized_bgr = cv2.cvtColor(neutralized_rgb, cv2.COLOR_RGB2BGR)
-                    out.write(neutralized_bgr)
-                else:
-                    out.write(frame)
-
-                processed += 1
-                frame_idx += 1
-
-                if processed % 50 == 0:
-                    logger.debug(f"  Processed {processed}/{frame_count} frames")
-
-            cap.release()
             out.release()
+            processed = len(frames_bgr)
 
         except ImportError as e:
             logger.error(f"LivePortrait import error: {e}")
             logger.warning("Falling back to passthrough mode")
             import shutil
             shutil.copy(video_path, output_path)
+            processed = 0
         except Exception as e:
             logger.error(f"LivePortrait processing error: {e}")
             import traceback
             traceback.print_exc()
             import shutil
             shutil.copy(video_path, output_path)
+            processed = 0
 
         elapsed = time.time() - start
-        fps_processed = frame_count / max(elapsed, 0.01)
+        fps_processed = processed / max(elapsed, 0.01)
         logger.info(f"  Processing time: {elapsed:.2f}s ({fps_processed:.1f} fps)")
         logger.info(f"  Output saved to: {output_path}")
         logger.info("LIVEPORTRAIT - Neutralization complete")
@@ -561,6 +568,231 @@ class LivePortrait:
         except Exception as e:
             logger.debug(f"Paste back error: {e}")
             return frame
+
+    def _process_frames_batched(
+        self,
+        frames_rgb: List[np.ndarray],
+        source_info: Dict[str, Any],
+        lip_ratio: float,
+        calc_lip_close_ratio,
+    ) -> List[np.ndarray]:
+        """
+        Batch-process multiple frames for lip neutralization.
+
+        Args:
+            frames_rgb: List of RGB images
+            source_info: Source face features
+            lip_ratio: Lip retargeting ratio (0.0 = neutral/closed, 1.0 = original)
+            calc_lip_close_ratio: Function to calculate lip ratios
+
+        Returns:
+            List of processed RGB images
+        """
+        batch_size = self.config.batch_size
+        results = []
+
+        for batch_start in range(0, len(frames_rgb), batch_size):
+            batch_end = min(batch_start + batch_size, len(frames_rgb))
+            batch_frames = frames_rgb[batch_start:batch_end]
+
+            # Crop all faces in batch (cropper is sequential)
+            batch_crop_infos = []
+            batch_crops = []
+            batch_lmks = []
+
+            for frame in batch_frames:
+                crop_info = self.cropper.crop_source_image(frame, self.crop_cfg)
+                if crop_info and 'img_crop_256x256' in crop_info:
+                    batch_crop_infos.append(crop_info)
+                    batch_crops.append(crop_info['img_crop_256x256'])
+                    batch_lmks.append(crop_info.get('lmk_crop'))
+                else:
+                    # Mark failed crops
+                    batch_crop_infos.append(None)
+                    batch_crops.append(None)
+                    batch_lmks.append(None)
+
+            # Filter valid crops and build batch tensor
+            valid_indices = [i for i, crop in enumerate(batch_crops) if crop is not None]
+
+            if not valid_indices:
+                # No valid faces, return original frames
+                results.extend(batch_frames)
+                continue
+
+            # Stack valid crops into tensor [B, 3, 256, 256]
+            valid_tensors = []
+            for i in valid_indices:
+                t = torch.from_numpy(batch_crops[i]).permute(2, 0, 1).float() / 255.0
+                valid_tensors.append(t)
+
+            batch_tensor = torch.stack(valid_tensors).to(self.device)
+            if self.config.fp16:
+                batch_tensor = batch_tensor.half()
+
+            with torch.no_grad():
+                # Batch keypoint extraction - get_kp_info supports batch [B, 3, H, W]
+                kp_driving = self.live_portrait_wrapper.get_kp_info(batch_tensor)
+                kp_source = source_info['kp_source']
+
+                # Apply lip delta for neutralization
+                if lip_ratio < 1.0 and hasattr(self.live_portrait_wrapper, 'retarget_lip'):
+                    kp_driving_modified = self._apply_lip_delta_batch(
+                        kp_source, kp_driving, source_info,
+                        [batch_lmks[i] for i in valid_indices],
+                        lip_ratio, calc_lip_close_ratio,
+                        batch_tensor.dtype
+                    )
+                else:
+                    kp_driving_modified = kp_driving
+
+                # Expand source features to match batch size
+                batch_len = len(valid_indices)
+                feature_3d_expanded = source_info['feature_3d'].expand(batch_len, -1, -1, -1)
+
+                # Expand kp_source to batch
+                kp_source_expanded = {}
+                for k, v in kp_source.items():
+                    if isinstance(v, torch.Tensor):
+                        kp_source_expanded[k] = v.expand(batch_len, *v.shape[1:])
+                    else:
+                        kp_source_expanded[k] = v
+
+                # Batch warp_decode - supports batch inputs
+                outputs = self.live_portrait_wrapper.warp_decode(
+                    feature_3d_expanded,
+                    kp_source_expanded,
+                    kp_driving_modified,
+                )
+
+            # Convert outputs to numpy and paste back
+            batch_results = [None] * len(batch_frames)
+
+            for out_idx, valid_idx in enumerate(valid_indices):
+                out_tensor = outputs[out_idx]
+                out_np = out_tensor.permute(1, 2, 0).cpu().float().numpy()
+                out_np = (out_np * 255).clip(0, 255).astype(np.uint8)
+
+                # Paste back into original frame
+                result = self._paste_back(
+                    batch_frames[valid_idx],
+                    out_np,
+                    batch_crop_infos[valid_idx]
+                )
+                batch_results[valid_idx] = result
+
+            # Fill in frames that failed face detection with originals
+            for i, result in enumerate(batch_results):
+                if result is None:
+                    batch_results[i] = batch_frames[i]
+
+            results.extend(batch_results)
+
+        return results
+
+    def _apply_lip_delta_batch(
+        self,
+        kp_source: Dict[str, torch.Tensor],
+        kp_driving: Dict[str, torch.Tensor],
+        source_info: Dict[str, Any],
+        driving_lmks: List[Optional[np.ndarray]],
+        lip_ratio: float,
+        calc_lip_close_ratio,
+        dtype: torch.dtype,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Apply lip retargeting delta to batch of driving keypoints.
+
+        Args:
+            kp_source: Source keypoints (B=1)
+            kp_driving: Driving keypoints (B=batch_size)
+            source_info: Source face info with landmarks
+            driving_lmks: List of driving landmarks
+            lip_ratio: Target lip ratio (0=closed, 1=original)
+            calc_lip_close_ratio: Function to calculate lip ratios
+            dtype: Tensor dtype
+
+        Returns:
+            Modified driving keypoints
+        """
+        source_lmk = source_info.get('source_lmk')
+        B = kp_driving['kp'].shape[0]
+
+        if source_lmk is None:
+            # Fallback to keypoint interpolation
+            return self._interpolate_keypoints_batch(kp_source, kp_driving, lip_ratio)
+
+        # Calculate source lip ratio once
+        source_lip_ratio = calc_lip_close_ratio(source_lmk[None])
+
+        # Build batch of combined lip ratios
+        combined_ratios = []
+        for driving_lmk in driving_lmks:
+            if driving_lmk is not None:
+                driving_lip_ratio = calc_lip_close_ratio(driving_lmk[None])
+                target_ratio = driving_lip_ratio * lip_ratio
+            else:
+                target_ratio = 0.0
+
+            combined_ratios.append([float(source_lip_ratio), float(target_ratio)])
+
+        combined_lip_ratio = torch.tensor(combined_ratios, device=self.device, dtype=dtype)
+
+        # Get expanded source keypoints for retarget_lip
+        x_s = kp_source['kp'].expand(B, -1, -1)
+
+        # retarget_lip(kp_source, lip_close_ratio) -> delta [B, 3*N]
+        lip_delta = self.live_portrait_wrapper.retarget_lip(x_s, combined_lip_ratio)
+
+        # Reshape delta to [B, N, 3] and add to driving keypoints
+        N = kp_driving['kp'].shape[1]
+        lip_delta_reshaped = lip_delta.view(B, N, 3)
+
+        # Create modified driving keypoints
+        kp_driving_modified = {}
+        for k, v in kp_driving.items():
+            if k == 'kp' and isinstance(v, torch.Tensor):
+                kp_driving_modified[k] = v + lip_delta_reshaped
+            elif isinstance(v, torch.Tensor):
+                kp_driving_modified[k] = v.clone()
+            else:
+                kp_driving_modified[k] = v
+
+        return kp_driving_modified
+
+    def _interpolate_keypoints_batch(
+        self,
+        kp_source: Dict[str, torch.Tensor],
+        kp_driving: Dict[str, torch.Tensor],
+        lip_ratio: float,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Fallback: Batch interpolate between source and driving keypoints.
+        """
+        kp_result = {}
+        LIP_INDICES = [6, 12, 14, 17, 19, 20]
+        B = kp_driving['kp'].shape[0]
+
+        for key, value in kp_driving.items():
+            if key in kp_source and isinstance(value, torch.Tensor):
+                source_value = kp_source[key]
+
+                if key == 'kp' and isinstance(source_value, torch.Tensor):
+                    # Expand source to batch
+                    source_expanded = source_value.expand(B, -1, -1)
+                    result = value.clone()
+
+                    for idx in LIP_INDICES:
+                        if idx < result.shape[1]:
+                            result[:, idx] = (1 - lip_ratio) * source_expanded[:, idx] + lip_ratio * value[:, idx]
+
+                    kp_result[key] = result
+                else:
+                    kp_result[key] = value
+            else:
+                kp_result[key] = value
+
+        return kp_result
 
     @property
     def is_loaded(self) -> bool:

@@ -29,6 +29,7 @@ from .musetalk import MuseTalk, MuseTalkConfig
 from .liveportrait import LivePortrait, LivePortraitConfig
 from .codeformer import CodeFormer, CodeFormerConfig
 from .compositor import FaceCompositor, FaceRegion
+from .cache import FaceCache
 from .utils import (
     get_video_info,
     get_audio_duration,
@@ -74,8 +75,25 @@ class PipelineConfig:
     fp16: bool = True
     aligned_size: int = 512
 
+    # Pipeline stage toggles
+    # ----------------------
+    # use_neutralization: Run LivePortrait to neutralize lips before lip-sync
+    #   - REQUIRED if source faces are actively speaking (prevents ghost lips)
+    #   - SKIP if source faces are already neutral/still (e.g., portraits)
+    use_neutralization: bool = True
+
+    # use_enhancement: Run CodeFormer to enhance face quality after lip-sync
+    #   - KEEP for final export quality (reduces VAE artifacts)
+    #   - SKIP for preview/draft/real-time (saves ~15ms/frame)
+    use_enhancement: bool = True
+
+    # enhancement_mode: Which enhancement method to use
+    #   - "codeformer": Full CodeFormer restoration (~15ms/frame, best quality)
+    #   - "fast": Simple sharpening + color matching (~3ms/frame, good quality)
+    #   - "none": No enhancement (fastest, acceptable quality)
+    enhancement_mode: str = "codeformer"
+
     # Quality settings
-    enhance_quality: bool = True
     fidelity_weight: float = 0.7
     feather_radius: int = 15
     boundary_blend_frames: int = 5
@@ -83,6 +101,10 @@ class PipelineConfig:
     # Parallel processing
     chunk_duration: float = 5.0
     max_workers: int = 4
+
+    # Caching (for repeated processing of same face)
+    # When enabled, caches VAE latents and masks per face identity
+    use_face_caching: bool = True
 
 
 class LipSyncPipeline:
@@ -105,18 +127,28 @@ class LipSyncPipeline:
         logger.debug(f"  Device: {self.config.device}")
         logger.debug(f"  FP16: {self.config.fp16}")
         logger.debug(f"  Aligned size: {self.config.aligned_size}")
-        logger.debug(f"  Enhance quality: {self.config.enhance_quality}")
+        logger.debug(f"  Neutralization: {self.config.use_neutralization}")
+        logger.debug(f"  Enhancement: {self.config.use_enhancement}")
+        logger.debug(f"  Face caching: {self.config.use_face_caching}")
         logger.debug(f"  MuseTalk path: {self.config.musetalk_path}")
         logger.debug(f"  LivePortrait path: {self.config.liveportrait_path}")
         logger.debug(f"  CodeFormer path: {self.config.codeformer_path}")
 
+        # Initialize face cache if enabled
+        self.cache = FaceCache(device=self.config.device) if self.config.use_face_caching else None
+        if self.cache:
+            logger.debug("  Face cache initialized")
+
         # Initialize models (lazy loading)
         logger.debug("Creating model wrappers (lazy loading)...")
-        self.musetalk = MuseTalk(MuseTalkConfig(
-            model_dir=self.config.musetalk_path,
-            device=self.config.device,
-            fp16=self.config.fp16,
-        ))
+        self.musetalk = MuseTalk(
+            config=MuseTalkConfig(
+                model_dir=self.config.musetalk_path,
+                device=self.config.device,
+                fp16=self.config.fp16,
+            ),
+            cache=self.cache,
+        )
 
         self.liveportrait = LivePortrait(LivePortraitConfig(
             model_dir=self.config.liveportrait_path,
@@ -146,25 +178,34 @@ class LipSyncPipeline:
             return
 
         logger.info("Loading lip-sync pipeline models to GPU...")
+        logger.info(f"  Pipeline config: neutralization={self.config.use_neutralization}, enhancement={self.config.use_enhancement}")
         start_time = time.time()
 
+        # MuseTalk is always required (core lip-sync engine)
         logger.info("  Loading MuseTalk...")
         musetalk_start = time.time()
         self.musetalk.load()
         logger.info(f"  MuseTalk loaded in {time.time() - musetalk_start:.2f}s")
 
-        logger.info("  Loading LivePortrait...")
-        liveportrait_start = time.time()
-        self.liveportrait.load()
-        logger.info(f"  LivePortrait loaded in {time.time() - liveportrait_start:.2f}s")
+        # LivePortrait is optional (lip neutralization)
+        if self.config.use_neutralization:
+            logger.info("  Loading LivePortrait...")
+            liveportrait_start = time.time()
+            self.liveportrait.load()
+            logger.info(f"  LivePortrait loaded in {time.time() - liveportrait_start:.2f}s")
+        else:
+            logger.info("  Skipping LivePortrait (use_neutralization=False)")
 
-        if self.config.enhance_quality:
+        # CodeFormer is optional (face enhancement) - only load if using codeformer mode
+        if self.config.use_enhancement and self.config.enhancement_mode == "codeformer":
             logger.info("  Loading CodeFormer...")
             codeformer_start = time.time()
             self.codeformer.load()
             logger.info(f"  CodeFormer loaded in {time.time() - codeformer_start:.2f}s")
+        elif self.config.use_enhancement and self.config.enhancement_mode == "fast":
+            logger.info("  Using fast enhancement (no model loading required)")
         else:
-            logger.info("  Skipping CodeFormer (enhance_quality=False)")
+            logger.info("  Skipping enhancement (use_enhancement=False or mode=none)")
 
         self._models_loaded = True
         total_time = time.time() - start_time
@@ -253,26 +294,33 @@ class LipSyncPipeline:
                 align_metadata = None
                 has_alignment = False
 
-            # Step 2: Neutralize with LivePortrait
-            logger.info("-" * 40)
-            logger.info("STEP 2: Expression Neutralization (LivePortrait)")
-            logger.info("-" * 40)
-            neutral_path = os.path.join(tmpdir, "neutral.mp4")
-            step_start = time.time()
+            # Step 2: Neutralize with LivePortrait (OPTIONAL)
+            if self.config.use_neutralization:
+                logger.info("-" * 40)
+                logger.info("STEP 2: Expression Neutralization (LivePortrait)")
+                logger.info("-" * 40)
+                neutral_path = os.path.join(tmpdir, "neutral.mp4")
+                step_start = time.time()
 
-            try:
-                logger.debug(f"  Input: {aligned_path}")
-                logger.debug(f"  lip_ratio: 0.0")
-                self.liveportrait.neutralize(
-                    aligned_path,
-                    neutral_path,
-                    lip_ratio=0.0,
-                )
-                logger.info(f"  Neutralization successful in {time.time() - step_start:.2f}s")
-                logger.debug(f"  Output: {neutral_path}")
-            except Exception as e:
-                logger.warning(f"  Neutralization failed: {e}")
-                logger.warning("  Continuing with aligned video...")
+                try:
+                    logger.debug(f"  Input: {aligned_path}")
+                    logger.debug(f"  lip_ratio: 0.0")
+                    self.liveportrait.neutralize(
+                        aligned_path,
+                        neutral_path,
+                        lip_ratio=0.0,
+                    )
+                    logger.info(f"  Neutralization successful in {time.time() - step_start:.2f}s")
+                    logger.debug(f"  Output: {neutral_path}")
+                except Exception as e:
+                    logger.warning(f"  Neutralization failed: {e}")
+                    logger.warning("  Continuing with aligned video...")
+                    neutral_path = aligned_path
+            else:
+                logger.info("-" * 40)
+                logger.info("STEP 2: Skipping Neutralization (use_neutralization=False)")
+                logger.info("-" * 40)
+                logger.info("  Source assumed to be neutral (no active lip movement)")
                 neutral_path = aligned_path
 
             # Step 3: Lip-sync with MuseTalk
@@ -292,8 +340,10 @@ class LipSyncPipeline:
             logger.info(f"  Lip-sync generation successful in {time.time() - step_start:.2f}s")
             logger.debug(f"  Output: {lipsync_path}")
 
-            # Step 4: Enhance with CodeFormer
-            if self.config.enhance_quality:
+            # Step 4: Enhancement (OPTIONAL - multiple modes)
+            enhancement_mode = self.config.enhancement_mode if self.config.use_enhancement else "none"
+
+            if enhancement_mode == "codeformer":
                 logger.info("-" * 40)
                 logger.info("STEP 4: Quality Enhancement (CodeFormer)")
                 logger.info("-" * 40)
@@ -315,9 +365,21 @@ class LipSyncPipeline:
                 )
                 logger.info(f"  Enhancement successful in {time.time() - step_start:.2f}s")
                 logger.debug(f"  Output: {enhanced_path}")
-            else:
+
+            elif enhancement_mode == "fast":
                 logger.info("-" * 40)
-                logger.info("STEP 4: Skipping Enhancement (disabled)")
+                logger.info("STEP 4: Fast Enhancement (bilateral + sharpen)")
+                logger.info("-" * 40)
+                enhanced_path = os.path.join(tmpdir, "enhanced.mp4")
+                step_start = time.time()
+
+                self._fast_enhance_video(lipsync_path, enhanced_path)
+                logger.info(f"  Fast enhancement done in {time.time() - step_start:.2f}s")
+                logger.debug(f"  Output: {enhanced_path}")
+
+            else:  # "none" or disabled
+                logger.info("-" * 40)
+                logger.info("STEP 4: Skipping Enhancement (mode=none)")
                 logger.info("-" * 40)
                 enhanced_path = lipsync_path
 
@@ -563,11 +625,15 @@ class LipSyncPipeline:
         )
         logger.debug(f"    Aligned: {aligned_path}")
 
-        # Neutralize
-        neutral_path = os.path.join(tmpdir, f"neutral_{uuid.uuid4()}.mp4")
-        logger.debug(f"    Neutralizing...")
-        self.liveportrait.neutralize(aligned_path, neutral_path, lip_ratio=0.0)
-        logger.debug(f"    Neutralized: {neutral_path}")
+        # Neutralize (optional)
+        if self.config.use_neutralization:
+            neutral_path = os.path.join(tmpdir, f"neutral_{uuid.uuid4()}.mp4")
+            logger.debug(f"    Neutralizing...")
+            self.liveportrait.neutralize(aligned_path, neutral_path, lip_ratio=0.0)
+            logger.debug(f"    Neutralized: {neutral_path}")
+        else:
+            neutral_path = aligned_path
+            logger.debug(f"    Skipping neutralization (use_neutralization=False)")
 
         # Lip-sync
         lipsync_path = os.path.join(tmpdir, f"lipsync_{uuid.uuid4()}.mp4")
@@ -576,10 +642,12 @@ class LipSyncPipeline:
         logger.debug(f"    Lip-synced: {lipsync_path}")
 
         # Enhance
-        if self.config.enhance_quality:
+        enhancement_mode = self.config.enhancement_mode if self.config.use_enhancement else "none"
+
+        if enhancement_mode == "codeformer":
             enhanced_path = os.path.join(tmpdir, f"enhanced_{uuid.uuid4()}.mp4")
             blend_ratio = CodeFormer.compute_blend_ratio(align_metadata.avg_face_size)
-            logger.debug(f"    Enhancing (blend_ratio={blend_ratio:.2f})...")
+            logger.debug(f"    Enhancing with CodeFormer (blend_ratio={blend_ratio:.2f})...")
             self.codeformer.enhance_video(
                 lipsync_path,
                 enhanced_path,
@@ -587,6 +655,11 @@ class LipSyncPipeline:
                 has_aligned=True,
             )
             logger.debug(f"    Enhanced: {enhanced_path}")
+        elif enhancement_mode == "fast":
+            enhanced_path = os.path.join(tmpdir, f"enhanced_{uuid.uuid4()}.mp4")
+            logger.debug(f"    Enhancing with fast mode...")
+            self._fast_enhance_video(lipsync_path, enhanced_path)
+            logger.debug(f"    Fast enhanced: {enhanced_path}")
         else:
             enhanced_path = lipsync_path
 
@@ -611,6 +684,52 @@ class LipSyncPipeline:
         cap.release()
         logger.debug(f"    Extracted {len(frames)} frames")
         return frames
+
+    def _fast_enhance_video(self, input_path: str, output_path: str) -> None:
+        """
+        Apply fast enhancement to video using simple CV2 operations.
+
+        This is ~4x faster than CodeFormer while providing acceptable quality.
+        Uses bilateral filtering + unsharp mask sharpening.
+        """
+        from .compositor import fast_enhance_face
+
+        cap = cv2.VideoCapture(input_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+        # Read first frame as reference for color matching
+        ret, first_frame = cap.read()
+        if not ret:
+            cap.release()
+            out.release()
+            return
+
+        reference = first_frame.copy()
+        enhanced = fast_enhance_face(first_frame, reference=None, sharpen_amount=0.3)
+        out.write(enhanced)
+
+        processed = 1
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            enhanced = fast_enhance_face(frame, reference=reference, sharpen_amount=0.3)
+            out.write(enhanced)
+            processed += 1
+
+            if processed % 100 == 0:
+                logger.debug(f"    Fast enhanced {processed}/{frame_count} frames")
+
+        cap.release()
+        out.release()
+        logger.debug(f"    Fast enhanced {processed} frames total")
 
     def _mix_audio_tracks(
         self,

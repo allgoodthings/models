@@ -32,7 +32,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from dataclasses import dataclass
 import cv2
 
@@ -47,6 +47,7 @@ class CodeFormerConfig:
     fp16: bool = True
     fidelity_weight: float = 0.7
     upscale: int = 1
+    batch_size: int = 16  # 16 frames @ 512x512 ≈ 1.5GB VRAM
 
 
 class CodeFormer:
@@ -224,24 +225,34 @@ class CodeFormer:
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         logger.info(f"  Video: {width}x{height} @ {fps:.2f}fps, {frame_count} frames")
+        logger.info(f"  Batch size: {self.config.batch_size}")
 
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-        processed_frames = 0
-        batch_size = 4  # Process multiple frames for efficiency
-
+        # Read all frames into memory
+        frames = []
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
+            frames.append(frame)
+        cap.release()
 
-            # Enhance the frame
-            enhanced = self.enhance_image(frame, fidelity_weight=fidelity)
+        if not frames:
+            logger.warning("  No frames read from video")
+            return output_path
 
+        logger.info(f"  Loaded {len(frames)} frames, starting batch enhancement...")
+
+        # Process all frames in batches
+        enhanced_frames = self.enhance_batch(frames, fidelity_weight=fidelity)
+
+        # Write output with blending
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+        for i, (original, enhanced) in enumerate(zip(frames, enhanced_frames)):
             # Blend with original
             result = cv2.addWeighted(
-                frame.astype(np.float32),
+                original.astype(np.float32),
                 1 - blend,
                 enhanced.astype(np.float32),
                 blend,
@@ -249,13 +260,12 @@ class CodeFormer:
             ).astype(np.uint8)
 
             out.write(result)
-            processed_frames += 1
 
-            if processed_frames % 50 == 0:
-                logger.debug(f"  Processed {processed_frames}/{frame_count} frames")
+            if (i + 1) % 50 == 0:
+                logger.debug(f"  Written {i + 1}/{len(frames)} frames")
 
-        cap.release()
         out.release()
+        processed_frames = len(frames)
 
         elapsed = time.time() - start
         logger.info(f"  Processed {processed_frames} frames")
@@ -322,6 +332,113 @@ class CodeFormer:
             output = cv2.resize(output, (original_size[1], original_size[0]), interpolation=cv2.INTER_LINEAR)
 
         return output
+
+    def _preprocess(self, image: np.ndarray) -> torch.Tensor:
+        """
+        Preprocess a single image for CodeFormer inference.
+
+        Args:
+            image: BGR image (any size)
+
+        Returns:
+            Tensor [1, 3, 512, 512] normalized to [-1, 1]
+        """
+        target_size = 512
+
+        # Resize to 512x512 if needed
+        if image.shape[0] != target_size or image.shape[1] != target_size:
+            face_input = cv2.resize(image, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
+        else:
+            face_input = image
+
+        # Convert BGR to RGB and normalize to [-1, 1]
+        face_input = cv2.cvtColor(face_input, cv2.COLOR_BGR2RGB)
+        face_input = face_input.astype(np.float32) / 255.0
+        face_input = (face_input - 0.5) / 0.5  # Normalize to [-1, 1]
+
+        # Convert to tensor: HWC -> CHW -> NCHW
+        face_tensor = torch.from_numpy(face_input.transpose(2, 0, 1)).unsqueeze(0)
+        return face_tensor
+
+    def _postprocess(self, output: torch.Tensor, original_size: tuple) -> np.ndarray:
+        """
+        Postprocess a single output tensor to BGR image.
+
+        Args:
+            output: Tensor [3, 512, 512] in [-1, 1] range
+            original_size: (height, width) to resize to
+
+        Returns:
+            BGR image (uint8)
+        """
+        target_size = 512
+
+        # CHW -> HWC
+        output = output.float().clamp(-1, 1)
+        output = (output + 1) / 2  # Denormalize to [0, 1]
+        output = output.cpu().numpy().transpose(1, 2, 0)  # CHW -> HWC
+        output = (output * 255).astype(np.uint8)
+
+        # Convert RGB back to BGR
+        output = cv2.cvtColor(output, cv2.COLOR_RGB2BGR)
+
+        # Resize back to original size if needed
+        if original_size[0] != target_size or original_size[1] != target_size:
+            output = cv2.resize(output, (original_size[1], original_size[0]), interpolation=cv2.INTER_LINEAR)
+
+        return output
+
+    def enhance_batch(
+        self,
+        images: List[np.ndarray],
+        fidelity_weight: Optional[float] = None,
+    ) -> List[np.ndarray]:
+        """
+        Batch-enhance multiple face images.
+
+        Args:
+            images: List of BGR images (any size, will be resized)
+            fidelity_weight: Balance between quality and fidelity (0=quality, 1=fidelity)
+
+        Returns:
+            List of enhanced BGR images (same sizes as inputs)
+        """
+        if not self._loaded:
+            self.load()
+
+        if not images:
+            return []
+
+        fidelity = fidelity_weight if fidelity_weight is not None else self.config.fidelity_weight
+        batch_size = self.config.batch_size
+
+        # Store original sizes for each image
+        original_sizes = [img.shape[:2] for img in images]
+
+        results = []
+        num_batches = (len(images) + batch_size - 1) // batch_size
+
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(images))
+            batch_images = images[start_idx:end_idx]
+            batch_sizes = original_sizes[start_idx:end_idx]
+
+            # Stack tensors [B, 3, 512, 512]
+            tensors = [self._preprocess(img) for img in batch_images]
+            batch_tensor = torch.cat(tensors, dim=0).to(self.device)
+
+            # Run batched inference with autocast
+            with torch.no_grad():
+                with torch.cuda.amp.autocast(enabled=self.config.fp16 and self.device.type == 'cuda'):
+                    outputs = self.net(batch_tensor, w=fidelity, adain=True)[0]
+
+            # Unstack and convert back to numpy
+            for j in range(outputs.shape[0]):
+                result = self._postprocess(outputs[j], batch_sizes[j])
+                results.append(result)
+
+        return results
 
     @staticmethod
     def compute_blend_ratio(avg_face_size: float) -> float:

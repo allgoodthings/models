@@ -28,6 +28,7 @@ from .alignment import FaceAligner, AlignmentMetadata, align_video, unalign_vide
 from .musetalk import MuseTalk, MuseTalkConfig
 from .liveportrait import LivePortrait, LivePortraitConfig
 from .codeformer import CodeFormer, CodeFormerConfig
+from .cache import FaceCache, FaceReference, AudioFeatures
 
 __version__ = "0.1.0"
 
@@ -52,4 +53,8 @@ __all__ = [
     "LivePortraitConfig",
     "CodeFormer",
     "CodeFormerConfig",
+    # Cache
+    "FaceCache",
+    "FaceReference",
+    "AudioFeatures",
 ]
