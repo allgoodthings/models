@@ -90,8 +90,9 @@ RUN uv pip install --system --no-cache \
     pillow>=10.2.0
 
 # Install face-related packages (after torch is installed)
+# Note: onnxruntime-gpu 1.19+ required for CUDA 12 (1.18.x is CUDA 11 only)
 RUN uv pip install --system --no-cache \
-    onnxruntime-gpu==1.18.0 \
+    onnxruntime-gpu>=1.19.0 \
     basicsr>=1.4.2 \
     facexlib>=0.3.0 \
     gfpgan>=1.3.8 \
