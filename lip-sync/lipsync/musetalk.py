@@ -50,6 +50,9 @@ class MuseTalkConfig:
     batch_size: int = 8
     # v1 or v15 - v15 is newer and better
     version: str = "v15"
+    # Whisper model for audio features: tiny, base, small, medium, large
+    # Larger = better lip-sync quality but slower inference
+    whisper_model: str = "small"
 
 
 class MuseTalk:
@@ -134,12 +137,15 @@ class MuseTalk:
             )
 
             # Load Audio processor (Whisper)
-            # Signature: Audio2Feature(whisper_model_type="tiny", model_path="...")
-            logger.info("  Loading Whisper audio processor...")
-            whisper_path = model_dir / "whisper" / "tiny.pt"
+            # Signature: Audio2Feature(whisper_model_type, model_path)
+            # model_path accepts: file path OR model name ("tiny", "base", "small", etc.)
+            # If model name is passed, it auto-downloads from OpenAI
+            logger.info(f"  Loading Whisper audio processor (model={self.config.whisper_model})...")
+            whisper_path = model_dir / "whisper" / f"{self.config.whisper_model}.pt"
             self.audio_processor = Audio2Feature(
-                whisper_model_type="tiny",
-                model_path=str(whisper_path) if whisper_path.exists() else "./models/whisper/tiny.pt",
+                whisper_model_type=self.config.whisper_model,
+                # Use local file if exists, otherwise use model name for auto-download
+                model_path=str(whisper_path) if whisper_path.exists() else self.config.whisper_model,
             )
 
             # Timesteps for UNet (always 0 for single-step inference)
