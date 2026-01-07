@@ -138,9 +138,8 @@ class CodeFormer:
         self.net.load_state_dict(state_dict, strict=True)
         self.net.eval()
 
-        if self.config.fp16 and self.device.type == 'cuda':
-            self.net = self.net.half()
-            logger.info("  Using FP16 precision")
+        # Note: FP16 handled via autocast in enhance_image(), not model conversion
+        # This avoids dtype mismatch issues between fp16 model and fp32 intermediate ops
 
         self._loaded = True
 
@@ -303,12 +302,11 @@ class CodeFormer:
         face_tensor = torch.from_numpy(face_input.transpose(2, 0, 1)).unsqueeze(0)
         face_tensor = face_tensor.to(self.device)
 
-        if self.config.fp16 and self.device.type == 'cuda':
-            face_tensor = face_tensor.half()
-
-        # Run CodeFormer inference
+        # Run CodeFormer inference with autocast for automatic mixed precision
+        # This handles dtype conversions between fp16/fp32 layers properly
         with torch.no_grad():
-            output = self.net(face_tensor, w=fidelity, adain=True)[0]
+            with torch.cuda.amp.autocast(enabled=self.config.fp16 and self.device.type == 'cuda'):
+                output = self.net(face_tensor, w=fidelity, adain=True)[0]
 
         # Convert back to numpy: NCHW -> CHW -> HWC
         output = output.squeeze(0).float().clamp(-1, 1)

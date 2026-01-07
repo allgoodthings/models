@@ -296,13 +296,11 @@ class MuseTalk:
 
             # Convert whisper chunks to tensor
             # Each chunk should be (seq_len, 384) for Whisper features
+            # Note: Keep as float32, autocast will handle conversion during inference
             whisper_batch = torch.stack([
                 torch.from_numpy(c).float() if isinstance(c, np.ndarray) else c
                 for c in whisper_chunks
             ]).to(self.device)
-
-            if self.config.fp16:
-                whisper_batch = whisper_batch.half()
 
             # Process in batches
             output_frames = []
@@ -321,18 +319,16 @@ class MuseTalk:
                     # unet.pe is PositionalEncoding(d_model=384)
                     audio_feature = self.unet.pe(batch_whisper)
 
-                    # Ensure dtype consistency - PE may output float32 even with fp16 input
-                    if self.config.fp16:
-                        audio_feature = audio_feature.half()
-                        masked_latents = masked_latents.half()
-
-                    # Single-step UNet inference
-                    # unet.model is UNet2DConditionModel
-                    pred = self.unet.model(
-                        masked_latents,
-                        self.timesteps.expand(batch_size),
-                        encoder_hidden_states=audio_feature,
-                    ).sample
+                    # Use autocast for automatic mixed precision handling
+                    # This properly manages dtype conversions between fp16/fp32 layers
+                    with torch.cuda.amp.autocast(enabled=self.config.fp16):
+                        # Single-step UNet inference
+                        # unet.model is UNet2DConditionModel
+                        pred = self.unet.model(
+                            masked_latents,
+                            self.timesteps.expand(batch_size),
+                            encoder_hidden_states=audio_feature,
+                        ).sample
 
                 # Decode latents to images
                 for j in range(pred.shape[0]):
