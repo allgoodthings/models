@@ -81,6 +81,7 @@ RUN uv pip install --system --no-cache \
     rich==13.7.1 \
     onnx==1.16.1 \
     scikit-image==0.24.0 \
+    albucore==0.0.16 \
     albumentations==1.4.10 \
     matplotlib==3.9.0 \
     imageio-ffmpeg==0.5.1 \
