@@ -31,7 +31,6 @@ CharacterReference = _schemas.CharacterReference
 DetectedFaceWithMetadata = _schemas.DetectedFaceWithMetadata
 DetectFacesRequest = _schemas.DetectFacesRequest
 DetectFacesResponse = _schemas.DetectFacesResponse
-FaceJobRequest = _schemas.FaceJobRequest
 LipSyncRequest = _schemas.LipSyncRequest
 LipSyncResponse = _schemas.LipSyncResponse
 FaceSegment = _schemas.FaceSegment
@@ -123,16 +122,17 @@ class TestLipSyncRequest:
             video_url="https://example.com/video.mp4",
             audio_url="https://example.com/audio.mp3",
             upload_url="https://storage.example.com/presigned",
-            faces=[
-                FaceJobRequest(
-                    character_id="alice",
-                    bbox=(100, 50, 200, 250),
-                    end_time_ms=5000,
+            characters=[
+                CharacterReference(
+                    id="alice",
+                    name="Alice",
+                    reference_image_url="https://example.com/alice.jpg",
                 )
             ],
         )
         assert req.enhance_quality is True  # Default
         assert req.fidelity_weight == 0.7  # Default
+        assert req.similarity_threshold == 0.5  # Default
 
     def test_missing_upload_url(self):
         with pytest.raises(pydantic.ValidationError):
@@ -140,22 +140,22 @@ class TestLipSyncRequest:
                 video_url="https://example.com/video.mp4",
                 audio_url="https://example.com/audio.mp3",
                 # Missing upload_url
-                faces=[
-                    FaceJobRequest(
-                        character_id="alice",
-                        bbox=(100, 50, 200, 250),
-                        end_time_ms=5000,
+                characters=[
+                    CharacterReference(
+                        id="alice",
+                        name="Alice",
+                        reference_image_url="https://example.com/alice.jpg",
                     )
                 ],
             )
 
-    def test_empty_faces_invalid(self):
+    def test_empty_characters_invalid(self):
         with pytest.raises(pydantic.ValidationError):
             LipSyncRequest(
                 video_url="https://example.com/video.mp4",
                 audio_url="https://example.com/audio.mp3",
                 upload_url="https://storage.example.com/presigned",
-                faces=[],
+                characters=[],
             )
 
     def test_fidelity_weight_bounds(self):
@@ -164,8 +164,8 @@ class TestLipSyncRequest:
             video_url="https://example.com/video.mp4",
             audio_url="https://example.com/audio.mp3",
             upload_url="https://storage.example.com/presigned",
-            faces=[
-                FaceJobRequest(character_id="a", bbox=(0, 0, 100, 100), end_time_ms=1000)
+            characters=[
+                CharacterReference(id="a", name="A", reference_image_url="http://x.com/a.jpg")
             ],
             fidelity_weight=0.0,
         )
@@ -177,8 +177,8 @@ class TestLipSyncRequest:
                 video_url="https://example.com/video.mp4",
                 audio_url="https://example.com/audio.mp3",
                 upload_url="https://storage.example.com/presigned",
-                faces=[
-                    FaceJobRequest(character_id="a", bbox=(0, 0, 100, 100), end_time_ms=1000)
+                characters=[
+                    CharacterReference(id="a", name="A", reference_image_url="http://x.com/a.jpg")
                 ],
                 fidelity_weight=1.5,
             )
