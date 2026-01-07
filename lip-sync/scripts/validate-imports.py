@@ -22,6 +22,24 @@ It does NOT:
 
 import sys
 import os
+import types
+
+# =============================================================================
+# TORCHVISION COMPATIBILITY FIX - Must run before any basicsr import
+# =============================================================================
+# basicsr 1.4.2 imports from torchvision.transforms.functional_tensor, which was
+# removed in torchvision 0.17+. This fix creates a dummy module so basicsr works.
+try:
+    from torchvision.transforms.functional_tensor import rgb_to_grayscale
+except ImportError:
+    try:
+        from torchvision.transforms.functional import rgb_to_grayscale
+        _functional_tensor = types.ModuleType("torchvision.transforms.functional_tensor")
+        _functional_tensor.rgb_to_grayscale = rgb_to_grayscale
+        sys.modules["torchvision.transforms.functional_tensor"] = _functional_tensor
+    except ImportError:
+        pass  # torchvision not installed yet, that's fine for import validation
+# =============================================================================
 
 # Add the lip-sync directory to path
 script_dir = os.path.dirname(os.path.abspath(__file__))

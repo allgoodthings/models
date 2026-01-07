@@ -5,6 +5,26 @@ CodeFormer enhances face quality after lip-sync processing,
 reducing artifacts and improving visual fidelity.
 """
 
+# =============================================================================
+# TORCHVISION COMPATIBILITY FIX
+# =============================================================================
+# basicsr 1.4.2 imports from torchvision.transforms.functional_tensor, which was
+# removed in torchvision 0.17+. This fix creates a dummy module so basicsr works.
+# See: https://github.com/XPixelGroup/BasicSR/pull/677
+# See: https://github.com/xinntao/Real-ESRGAN/issues/859
+import sys
+import types
+
+try:
+    from torchvision.transforms.functional_tensor import rgb_to_grayscale
+except ImportError:
+    from torchvision.transforms.functional import rgb_to_grayscale
+    # Create a fake module for backward compatibility
+    _functional_tensor = types.ModuleType("torchvision.transforms.functional_tensor")
+    _functional_tensor.rgb_to_grayscale = rgb_to_grayscale
+    sys.modules["torchvision.transforms.functional_tensor"] = _functional_tensor
+# =============================================================================
+
 import logging
 import os
 import time
