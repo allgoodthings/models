@@ -111,11 +111,12 @@ class MuseTalk:
                 unet_weights = model_dir / "musetalk" / "pytorch_model.bin"
 
             # VAE path - uses stabilityai/sd-vae-ft-mse from HuggingFace
-            # Downloaded via AutoencoderKL.from_pretrained() or manually
+            # Downloaded via download_models.py or from HuggingFace directly
             vae_path = model_dir / "sd-vae-ft-mse"
             if not vae_path.exists():
-                # Fall back to HuggingFace cache
-                vae_path = Path("./models/sd-vae-ft-mse/")
+                # Fall back to HuggingFace repo ID (will use cached or download)
+                logger.info("  VAE not found locally, using HuggingFace repo...")
+                vae_path = Path("stabilityai/sd-vae-ft-mse")
 
             # Load VAE
             # Signature: VAE(model_path, resized_img=256, use_float16=False)
