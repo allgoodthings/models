@@ -321,6 +321,11 @@ class MuseTalk:
                     # unet.pe is PositionalEncoding(d_model=384)
                     audio_feature = self.unet.pe(batch_whisper)
 
+                    # Ensure dtype consistency - PE may output float32 even with fp16 input
+                    if self.config.fp16:
+                        audio_feature = audio_feature.half()
+                        masked_latents = masked_latents.half()
+
                     # Single-step UNet inference
                     # unet.model is UNet2DConditionModel
                     pred = self.unet.model(

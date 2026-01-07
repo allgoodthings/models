@@ -151,9 +151,10 @@ class LivePortrait:
                 crop_cfg=crop_cfg,
             )
 
-            # Store wrapper and cropper for direct access
+            # Store wrapper, cropper, and config for direct access
             self.live_portrait_wrapper = self.pipeline.live_portrait_wrapper
             self.cropper = self.pipeline.cropper
+            self.crop_cfg = crop_cfg
 
         except ImportError as e:
             logger.error(f"Failed to import LivePortrait package: {e}")
@@ -319,7 +320,7 @@ class LivePortrait:
         try:
             # Use cropper to detect and crop face
             # Returns dict with: img_crop, img_crop_256x256, lmk_crop, lmk_crop_256x256, M_c2o, pt_crop
-            crop_info = self.cropper.crop_source_image(frame_rgb)
+            crop_info = self.cropper.crop_source_image(frame_rgb, self.crop_cfg)
 
             if crop_info is None:
                 logger.warning("No face detected by cropper")
@@ -382,8 +383,8 @@ class LivePortrait:
         6. Generate output via warp_decode
         """
         try:
-            # Crop driving frame
-            crop_info = self.cropper.crop_source_image(frame_rgb)
+            # Crop driving frame (crop_cfg required by LivePortrait API)
+            crop_info = self.cropper.crop_source_image(frame_rgb, self.crop_cfg)
 
             if crop_info is None or 'img_crop_256x256' not in crop_info:
                 return frame_rgb
