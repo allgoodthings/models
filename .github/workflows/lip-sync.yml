@@ -153,9 +153,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git /app/LivePortrait
 
-      - name: Clone CodeFormer repository
-        run: |
-          git clone --depth 1 https://github.com/sczhou/CodeFormer.git /app/CodeFormer
+      # Note: CodeFormer architecture is bundled in lipsync/archs/ to avoid basicsr conflicts
 
       # Cache model weights between runs
       # v3: Force fresh download after KlingTeam repo fix + landmark.onnx verification
@@ -211,11 +209,10 @@ jobs:
         env:
           CUDA_VISIBLE_DEVICES: ""
           # Mirror Docker's PYTHONPATH exactly
-          PYTHONPATH: "/app:/app/MuseTalk:/app/LivePortrait:/app/CodeFormer:${{ github.workspace }}/lip-sync"
+          PYTHONPATH: "/app:/app/MuseTalk:/app/LivePortrait:${{ github.workspace }}/lip-sync"
           MODELS_DIR: "/app/models"
           MUSETALK_PATH: "/app/MuseTalk"
           LIVEPORTRAIT_PATH: "/app/LivePortrait"
-          CODEFORMER_PATH: "/app/CodeFormer"
           CODEFORMER_WEIGHTS: "/app/models/codeformer"
 
   # ==========================================================================

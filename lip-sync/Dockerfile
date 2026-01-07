@@ -44,9 +44,9 @@ WORKDIR /app
 
 # Clone official repos first (separate layer for caching)
 # These provide the actual model code that we import
+# Note: CodeFormer architecture is bundled in lipsync/archs/ to avoid basicsr conflicts
 RUN git clone --depth 1 https://github.com/TMElyralab/MuseTalk.git /app/MuseTalk \
-    && git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git /app/LivePortrait \
-    && git clone --depth 1 https://github.com/sczhou/CodeFormer.git /app/CodeFormer
+    && git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git /app/LivePortrait
 
 # Install PyTorch with CUDA support FIRST (pinned version for CUDA 12.4)
 RUN uv pip install --system --no-cache \
@@ -156,7 +156,7 @@ AutoencoderKL.from_pretrained('stabilityai/sd-vae-ft-mse'); \
 print('VAE downloaded successfully')"
 
 # Set environment - PYTHONPATH must include repo roots for imports
-ENV PYTHONPATH=/app:/app/MuseTalk:/app/LivePortrait:/app/CodeFormer
+ENV PYTHONPATH=/app:/app/MuseTalk:/app/LivePortrait
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_VISIBLE_DEVICES=0
 
@@ -164,7 +164,6 @@ ENV CUDA_VISIBLE_DEVICES=0
 ENV MODELS_DIR=/app/models
 ENV MUSETALK_PATH=/app/MuseTalk
 ENV LIVEPORTRAIT_PATH=/app/LivePortrait
-ENV CODEFORMER_PATH=/app/CodeFormer
 ENV CODEFORMER_WEIGHTS=/app/models/codeformer
 
 # Server port
