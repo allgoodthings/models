@@ -267,7 +267,10 @@ def main():
         print("=" * 50)
         print()
 
-        verify_downloads(target_dir)
+        if not verify_downloads(target_dir):
+            print("\nERROR: Model verification failed!")
+            print("Some required files are missing. Check download logs above.")
+            sys.exit(1)
 
     except Exception as e:
         print(f"Error downloading models: {e}")

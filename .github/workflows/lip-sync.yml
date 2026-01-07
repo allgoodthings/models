@@ -153,7 +153,8 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git /app/LivePortrait
 
-      # Cache model weights between runs (bump version to invalidate old cache)
+      # Cache model weights between runs
+      # v3: Force fresh download after KlingTeam repo fix + landmark.onnx verification
       - name: Cache model weights
         uses: actions/cache@v4
         with:
@@ -161,9 +162,8 @@ jobs:
             /app/models
             ~/.cache/huggingface
             ~/.insightface
-          key: lip-sync-models-v2-${{ hashFiles('lip-sync/scripts/download_models.py') }}
-          restore-keys: |
-            lip-sync-models-v2-
+          key: lip-sync-models-v3-${{ hashFiles('lip-sync/scripts/download_models.py') }}
+          # No restore-keys - force exact match to avoid stale cache
 
       - name: Install PyTorch CPU and dependencies
         working-directory: lip-sync
