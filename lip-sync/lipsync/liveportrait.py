@@ -568,10 +568,10 @@ def download_liveportrait_models(target_dir: str = "/app/models/liveportrait") -
     print(f"Downloading LivePortrait models to {target_dir}...")
     os.makedirs(target_dir, exist_ok=True)
 
-    # Download from KwaiVGI/LivePortrait
+    # Download from KlingTeam/LivePortrait (moved from KwaiVGI)
     # Structure: liveportrait/base_models/*.pth, liveportrait/retargeting_models/*.pth
     snapshot_download(
-        repo_id="KwaiVGI/LivePortrait",
+        repo_id="KlingTeam/LivePortrait",
         local_dir=target_dir,
         ignore_patterns=["*.md", "*.txt", "*.git*", "docs/*", "assets/*"],
     )

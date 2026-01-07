@@ -67,8 +67,9 @@ def download_liveportrait(target_dir: str) -> None:
 
     print(f"Downloading LivePortrait to {target_dir}/liveportrait...")
 
+    # Note: HuggingFace repo moved from KwaiVGI to KlingTeam
     snapshot_download(
-        repo_id="KwaiVGI/LivePortrait",
+        repo_id="KlingTeam/LivePortrait",
         local_dir=os.path.join(target_dir, "liveportrait"),
         ignore_patterns=["*.md", "*.txt", "*.git*", "docs/*", "assets/*"],
     )
