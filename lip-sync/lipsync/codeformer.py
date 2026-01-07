@@ -88,8 +88,19 @@ class CodeFormer:
 
         start_time = time.time()
 
-        # Import CodeFormer architecture from basicsr
+        # Import CodeFormer architecture from the cloned CodeFormer repo
+        # This import registers 'CodeFormer' in basicsr's ARCH_REGISTRY
+        # The CodeFormer repo must be in PYTHONPATH for this to work
         from basicsr.utils.registry import ARCH_REGISTRY
+
+        # Import the architecture module to trigger @ARCH_REGISTRY.register()
+        # This is from the CodeFormer repo's basicsr/archs/codeformer_arch.py
+        try:
+            import basicsr.archs.codeformer_arch  # noqa: F401
+        except ImportError as e:
+            logger.error(f"Failed to import codeformer_arch: {e}")
+            logger.error("Make sure CodeFormer repo is cloned and in PYTHONPATH")
+            raise
 
         # Build CodeFormer network
         self.net = ARCH_REGISTRY.get('CodeFormer')(
