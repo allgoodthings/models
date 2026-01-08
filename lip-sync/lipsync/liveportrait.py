@@ -457,11 +457,12 @@ class LivePortrait:
                     kp_driving_modified = kp_driving
 
                 # Generate output using warp_decode
-                # warp_decode(feature_3d, kp_source, kp_driving) -> output tensor
+                # warp_decode expects tensors (BxNx3), not dicts
+                # get_kp_info returns dict with 'kp' key containing the tensor
                 output = self.live_portrait_wrapper.warp_decode(
                     source_info['feature_3d'],
-                    kp_source,
-                    kp_driving_modified,
+                    kp_source['kp'],
+                    kp_driving_modified['kp'],
                 )
 
                 # Convert output tensor to numpy RGB
@@ -651,19 +652,18 @@ class LivePortrait:
                 # feature_3d is 5D: [1, 32, 16, 64, 64] - expand first dim only
                 feature_3d_expanded = source_info['feature_3d'].expand(batch_len, *source_info['feature_3d'].shape[1:])
 
-                # Expand kp_source to batch
-                kp_source_expanded = {}
-                for k, v in kp_source.items():
-                    if isinstance(v, torch.Tensor):
-                        kp_source_expanded[k] = v.expand(batch_len, *v.shape[1:])
-                    else:
-                        kp_source_expanded[k] = v
+                # Expand kp_source tensor to batch
+                # kp_source is a dict with 'kp' key, warp_decode expects the tensor directly
+                kp_source_tensor = kp_source['kp'].expand(batch_len, *kp_source['kp'].shape[1:])
 
-                # Batch warp_decode - supports batch inputs
+                # kp_driving_modified is also a dict, extract the tensor
+                kp_driving_tensor = kp_driving_modified['kp']
+
+                # Batch warp_decode - expects tensors (BxNx3), not dicts
                 outputs = self.live_portrait_wrapper.warp_decode(
                     feature_3d_expanded,
-                    kp_source_expanded,
-                    kp_driving_modified,
+                    kp_source_tensor,
+                    kp_driving_tensor,
                 )
 
             # Convert outputs to numpy and paste back
