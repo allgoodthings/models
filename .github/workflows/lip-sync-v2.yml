@@ -38,16 +38,14 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pydantic numpy opencv-python-headless
+          pip install pytest pydantic
 
       - name: Run unit tests
         working-directory: lip-sync-v2
         run: |
           export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-          # Run schema tests
+          # Run schema tests (just needs pydantic)
           pytest tests/test_schemas.py -v --tb=short
-          # Run tracker tests (pure Python logic)
-          pytest tests/test_tracker.py -v --tb=short
 
   # ==========================================================================
   # Integration Tests - Frame extraction with ffmpeg

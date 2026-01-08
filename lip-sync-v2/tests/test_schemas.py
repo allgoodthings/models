@@ -1,18 +1,37 @@
 """
 Unit tests for Pydantic schemas.
+
+These tests validate schema structure and validation without any models.
+Run with: pytest tests/test_schemas.py -v
 """
 
-import pytest
-from pydantic import ValidationError
+import importlib.util
+from pathlib import Path
 
-from lipsync.server.schemas import (
-    CharacterReference,
-    LipSyncRequest,
-    LipSyncResponse,
-    FaceTrackingRequest,
-    FaceTrackingResponse,
-    HealthResponse,
-)
+import pytest
+
+# Check for pydantic
+try:
+    from pydantic import ValidationError
+    HAS_PYDANTIC = True
+except ImportError:
+    HAS_PYDANTIC = False
+
+pytestmark = pytest.mark.skipif(not HAS_PYDANTIC, reason="pydantic not installed")
+
+# Load schemas module directly from file (avoid package __init__.py which imports heavy deps)
+_module_path = Path(__file__).parent.parent / "lipsync" / "server" / "schemas.py"
+_spec = importlib.util.spec_from_file_location("schemas", _module_path)
+_schemas = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_schemas)
+
+# Import schemas
+CharacterReference = _schemas.CharacterReference
+LipSyncRequest = _schemas.LipSyncRequest
+LipSyncResponse = _schemas.LipSyncResponse
+FaceTrackingRequest = _schemas.FaceTrackingRequest
+FaceTrackingResponse = _schemas.FaceTrackingResponse
+HealthResponse = _schemas.HealthResponse
 
 
 class TestCharacterReference:
