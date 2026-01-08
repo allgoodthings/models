@@ -1,0 +1,283 @@
+name: Lip-Sync V2 CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'lip-sync-v2/**'
+      - '.github/workflows/lip-sync-v2.yml'
+    tags: ['lip-sync-v2-*']
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'lip-sync-v2/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/lip-sync-v2
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ==========================================================================
+  # Unit Tests - Fast, minimal dependencies
+  # ==========================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pydantic numpy opencv-python-headless
+
+      - name: Run unit tests
+        working-directory: lip-sync-v2
+        run: |
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+          # Run schema tests
+          pytest tests/test_schemas.py -v --tb=short
+          # Run tracker tests (pure Python logic)
+          pytest tests/test_tracker.py -v --tb=short
+
+  # ==========================================================================
+  # Integration Tests - Frame extraction with ffmpeg
+  # ==========================================================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: unit-tests
+
+    steps:
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install pytest numpy opencv-python-headless pydantic
+
+      - name: Run integration tests
+        working-directory: lip-sync-v2
+        run: |
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+          # Run frame extractor tests (requires ffmpeg)
+          pytest tests/test_frame_extractor.py -v --tb=short
+
+  # ==========================================================================
+  # Lint
+  # ==========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install linters
+        run: |
+          pip install ruff black
+
+      - name: Run ruff
+        working-directory: lip-sync-v2
+        run: |
+          ruff check lipsync/ tests/ || echo "Lint issues found (non-blocking)"
+
+      - name: Run black (check only)
+        working-directory: lip-sync-v2
+        run: |
+          black --check lipsync/ tests/ || echo "Code formatting issues found (non-blocking)"
+
+  # ==========================================================================
+  # CPU Validation - Full pipeline test on CPU
+  # ==========================================================================
+  cpu-validation:
+    name: CPU Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [unit-tests, integration-tests]
+    container:
+      image: python:3.11
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 git \
+            build-essential g++
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Cache InsightFace models
+      - name: Cache InsightFace models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.insightface
+          key: lip-sync-v2-insightface-v1
+
+      - name: Install PyTorch CPU and dependencies
+        working-directory: lip-sync-v2
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install \
+            numpy \
+            opencv-python-headless \
+            pydantic \
+            insightface \
+            onnxruntime
+
+      - name: Run CPU validation
+        working-directory: lip-sync-v2
+        run: |
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+          python scripts/test-cpu-validation.py --verbose
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+
+  # ==========================================================================
+  # Docker Build
+  # ==========================================================================
+  build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [unit-tests, integration-tests, lint, cpu-validation]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker system prune --all --force --volumes
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=match,pattern=lip-sync-v2-(.*),group=1
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./lip-sync-v2
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            SKIP_MODEL_DOWNLOAD=true
+
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: echo "Image pushed with tags ${{ steps.meta.outputs.tags }}"
+
+  # ==========================================================================
+  # Docker Smoke Test
+  # ==========================================================================
+  docker-smoke-test:
+    name: Docker Smoke Test
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo docker system prune --all --force --volumes
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./lip-sync-v2
+          push: false
+          load: true
+          tags: lip-sync-v2:test
+          cache-from: type=gha
+          build-args: |
+            SKIP_MODEL_DOWNLOAD=true
+
+      - name: Test image starts
+        run: |
+          # Start container without GPU, skip model downloads for smoke test
+          docker run -d --name lipsync-v2-test -p 8000:8000 \
+            -e PRELOAD_MODELS=false \
+            -e SKIP_MODEL_DOWNLOAD=true \
+            lip-sync-v2:test
+
+          # Wait for server to start
+          sleep 15
+
+          # Check health endpoint
+          curl -f http://localhost:8000/health || (docker logs lipsync-v2-test && exit 1)
+
+          # Check root endpoint
+          curl -f http://localhost:8000/ || (docker logs lipsync-v2-test && exit 1)
+
+          # Cleanup
+          docker stop lipsync-v2-test
+          docker rm lipsync-v2-test
