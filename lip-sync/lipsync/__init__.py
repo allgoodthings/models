@@ -24,7 +24,15 @@ except ImportError:
 
 from .pipeline import LipSyncPipeline, PipelineConfig, FaceJob, process_lipsync
 from .compositor import FaceCompositor, FaceRegion
-from .alignment import FaceAligner, AlignmentMetadata, align_video, unalign_video
+from .alignment import (
+    FaceAligner,
+    AlignmentMetadata,
+    align_video,
+    unalign_video,
+    CropMetadata,
+    crop_video_to_bbox,
+    paste_video_from_bbox,
+)
 from .musetalk import MuseTalk, MuseTalkConfig
 from .liveportrait import LivePortrait, LivePortraitConfig
 from .codeformer import CodeFormer, CodeFormerConfig
@@ -41,11 +49,15 @@ __all__ = [
     # Compositor
     "FaceCompositor",
     "FaceRegion",
-    # Alignment
+    # Alignment (old - perspective warp)
     "FaceAligner",
     "AlignmentMetadata",
     "align_video",
     "unalign_video",
+    # Alignment (new - simple bbox crop/paste)
+    "CropMetadata",
+    "crop_video_to_bbox",
+    "paste_video_from_bbox",
     # Models
     "MuseTalk",
     "MuseTalkConfig",

@@ -24,7 +24,12 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 
-from .alignment import FaceAligner, align_video, unalign_video, AlignmentMetadata
+from .alignment import (
+    FaceAligner,
+    crop_video_to_bbox,
+    paste_video_from_bbox,
+    CropMetadata,
+)
 from .musetalk import MuseTalk, MuseTalkConfig
 from .liveportrait import LivePortrait, LivePortraitConfig
 from .codeformer import CodeFormer, CodeFormerConfig
@@ -230,14 +235,14 @@ class LipSyncPipeline:
         """
         Process lip-sync for a single face.
 
-        This is the simpler case where we process the entire video
-        with one face and one audio track.
+        If target_bbox is provided, crops to that region first (for multi-face isolation).
+        Models handle their own face detection within the (cropped) video.
 
         Args:
             video_path: Path to input video
             audio_path: Path to audio file
             output_path: Path for output video
-            target_bbox: Optional bbox to focus on specific face
+            target_bbox: Optional bbox (x, y, w, h) to focus on specific face
 
         Returns:
             Path to output video
@@ -268,33 +273,31 @@ class LipSyncPipeline:
         with tempfile.TemporaryDirectory() as tmpdir:
             logger.debug(f"Using temp directory: {tmpdir}")
 
-            # Step 1: Align face
-            logger.info("-" * 40)
-            logger.info("STEP 1: Face Alignment")
-            logger.info("-" * 40)
-            aligned_path = os.path.join(tmpdir, "aligned.mp4")
-            step_start = time.time()
+            # Step 1: Crop to bbox (if multi-face isolation needed)
+            crop_metadata: Optional[CropMetadata] = None
+            if target_bbox is not None:
+                logger.info("-" * 40)
+                logger.info("STEP 1: Crop to Target Bbox")
+                logger.info("-" * 40)
+                cropped_path = os.path.join(tmpdir, "cropped.mp4")
+                step_start = time.time()
 
-            try:
-                logger.debug(f"  Calling align_video with target_bbox={target_bbox}")
-                align_metadata = align_video(
+                crop_metadata = crop_video_to_bbox(
                     video_path,
-                    aligned_path,
-                    target_bbox=target_bbox,
-                    output_size=self.config.aligned_size,
+                    cropped_path,
+                    bbox=target_bbox,
+                    margin=0.5,  # 50% margin around face for context
                 )
-                has_alignment = True
-                logger.info(f"  Alignment successful in {time.time() - step_start:.2f}s")
-                logger.debug(f"  Avg face size: {align_metadata.avg_face_size:.2f}%")
-                logger.debug(f"  Output: {aligned_path}")
-            except Exception as e:
-                logger.warning(f"  Alignment failed: {e}")
-                logger.warning("  Continuing without alignment...")
-                aligned_path = video_path
-                align_metadata = None
-                has_alignment = False
+                input_for_models = cropped_path
+                logger.info(f"  Crop successful in {time.time() - step_start:.2f}s")
+            else:
+                logger.info("-" * 40)
+                logger.info("STEP 1: No Crop Needed (single face assumed)")
+                logger.info("-" * 40)
+                input_for_models = video_path
 
             # Step 2: Neutralize with LivePortrait (OPTIONAL)
+            # Models do their own face detection within the input video
             if self.config.use_neutralization:
                 logger.info("-" * 40)
                 logger.info("STEP 2: Expression Neutralization (LivePortrait)")
@@ -303,25 +306,22 @@ class LipSyncPipeline:
                 step_start = time.time()
 
                 try:
-                    logger.debug(f"  Input: {aligned_path}")
+                    logger.debug(f"  Input: {input_for_models}")
                     logger.debug(f"  lip_ratio: 0.0")
                     self.liveportrait.neutralize(
-                        aligned_path,
+                        input_for_models,
                         neutral_path,
                         lip_ratio=0.0,
                     )
+                    input_for_models = neutral_path
                     logger.info(f"  Neutralization successful in {time.time() - step_start:.2f}s")
-                    logger.debug(f"  Output: {neutral_path}")
                 except Exception as e:
                     logger.warning(f"  Neutralization failed: {e}")
-                    logger.warning("  Continuing with aligned video...")
-                    neutral_path = aligned_path
+                    logger.warning("  Continuing without neutralization...")
             else:
                 logger.info("-" * 40)
                 logger.info("STEP 2: Skipping Neutralization (use_neutralization=False)")
                 logger.info("-" * 40)
-                logger.info("  Source assumed to be neutral (no active lip movement)")
-                neutral_path = aligned_path
 
             # Step 3: Lip-sync with MuseTalk
             logger.info("-" * 40)
@@ -330,17 +330,16 @@ class LipSyncPipeline:
             lipsync_path = os.path.join(tmpdir, "lipsync.mp4")
             step_start = time.time()
 
-            logger.debug(f"  Video input: {neutral_path}")
+            logger.debug(f"  Video input: {input_for_models}")
             logger.debug(f"  Audio input: {audio_path}")
             self.musetalk.process(
-                neutral_path,
+                input_for_models,
                 audio_path,
                 lipsync_path,
             )
             logger.info(f"  Lip-sync generation successful in {time.time() - step_start:.2f}s")
-            logger.debug(f"  Output: {lipsync_path}")
 
-            # Step 4: Enhancement (OPTIONAL - multiple modes)
+            # Step 4: Enhancement (OPTIONAL)
             enhancement_mode = self.config.enhancement_mode if self.config.use_enhancement else "none"
 
             if enhancement_mode == "codeformer":
@@ -350,21 +349,19 @@ class LipSyncPipeline:
                 enhanced_path = os.path.join(tmpdir, "enhanced.mp4")
                 step_start = time.time()
 
-                blend_ratio = CodeFormer.compute_blend_ratio(
-                    align_metadata.avg_face_size if align_metadata else 5.0
-                )
+                # Use default blend ratio since we don't have alignment metadata
+                blend_ratio = 0.7
                 logger.debug(f"  Input: {lipsync_path}")
                 logger.debug(f"  Blend ratio: {blend_ratio:.2f}")
-                logger.debug(f"  Has aligned: {has_alignment}")
 
                 self.codeformer.enhance_video(
                     lipsync_path,
                     enhanced_path,
                     blend_ratio=blend_ratio,
-                    has_aligned=has_alignment,
+                    has_aligned=False,  # Models handle their own alignment
                 )
+                processed_path = enhanced_path
                 logger.info(f"  Enhancement successful in {time.time() - step_start:.2f}s")
-                logger.debug(f"  Output: {enhanced_path}")
 
             elif enhancement_mode == "fast":
                 logger.info("-" * 40)
@@ -374,38 +371,37 @@ class LipSyncPipeline:
                 step_start = time.time()
 
                 self._fast_enhance_video(lipsync_path, enhanced_path)
+                processed_path = enhanced_path
                 logger.info(f"  Fast enhancement done in {time.time() - step_start:.2f}s")
-                logger.debug(f"  Output: {enhanced_path}")
 
             else:  # "none" or disabled
                 logger.info("-" * 40)
                 logger.info("STEP 4: Skipping Enhancement (mode=none)")
                 logger.info("-" * 40)
-                enhanced_path = lipsync_path
+                processed_path = lipsync_path
 
-            # Step 5: Unalign back to original video
-            if has_alignment and align_metadata:
+            # Step 5: Paste back (if we cropped)
+            if crop_metadata is not None:
                 logger.info("-" * 40)
-                logger.info("STEP 5: Unalignment (back to original frame)")
+                logger.info("STEP 5: Paste Back to Original Frame")
                 logger.info("-" * 40)
-                unaligned_path = os.path.join(tmpdir, "unaligned.mp4")
+                pasted_path = os.path.join(tmpdir, "pasted.mp4")
                 step_start = time.time()
 
-                logger.debug(f"  Input: {enhanced_path}")
-                logger.debug(f"  Original video: {video_path}")
-                unalign_video(
-                    enhanced_path,
+                paste_video_from_bbox(
+                    processed_path,
                     video_path,
-                    align_metadata,
-                    unaligned_path,
+                    pasted_path,
+                    crop_metadata,
+                    feather_pixels=15,
                 )
-                logger.info(f"  Unalignment successful in {time.time() - step_start:.2f}s")
-                logger.debug(f"  Output: {unaligned_path}")
+                final_video_path = pasted_path
+                logger.info(f"  Paste successful in {time.time() - step_start:.2f}s")
             else:
                 logger.info("-" * 40)
-                logger.info("STEP 5: Skipping Unalignment (no alignment metadata)")
+                logger.info("STEP 5: No Paste Needed (no crop was done)")
                 logger.info("-" * 40)
-                unaligned_path = enhanced_path
+                final_video_path = processed_path
 
             # Step 6: Add audio
             logger.info("-" * 40)
@@ -413,10 +409,10 @@ class LipSyncPipeline:
             logger.info("-" * 40)
             step_start = time.time()
 
-            logger.debug(f"  Video: {unaligned_path}")
+            logger.debug(f"  Video: {final_video_path}")
             logger.debug(f"  Audio: {audio_path}")
             logger.debug(f"  Output: {output_path}")
-            combine_audio_video(unaligned_path, audio_path, output_path)
+            combine_audio_video(final_video_path, audio_path, output_path)
             logger.info(f"  Audio combined in {time.time() - step_start:.2f}s")
 
         # Done
@@ -611,34 +607,39 @@ class LipSyncPipeline:
         bbox: Tuple[int, int, int, int],
         tmpdir: str,
     ) -> None:
-        """Process a single face segment."""
+        """Process a single face segment using simple bbox crop/paste."""
         logger.debug(f"    _process_face_segment: bbox={bbox}")
 
-        # Align with target bbox
-        aligned_path = os.path.join(tmpdir, f"aligned_{uuid.uuid4()}.mp4")
-        logger.debug(f"    Aligning face...")
-        align_metadata = align_video(
+        # Crop to target bbox
+        cropped_path = os.path.join(tmpdir, f"cropped_{uuid.uuid4()}.mp4")
+        logger.debug(f"    Cropping to bbox...")
+        crop_metadata = crop_video_to_bbox(
             video_path,
-            aligned_path,
-            target_bbox=bbox,
-            output_size=self.config.aligned_size,
+            cropped_path,
+            bbox=bbox,
+            margin=0.5,
         )
-        logger.debug(f"    Aligned: {aligned_path}")
+        logger.debug(f"    Cropped: {cropped_path}")
+
+        input_for_models = cropped_path
 
         # Neutralize (optional)
         if self.config.use_neutralization:
             neutral_path = os.path.join(tmpdir, f"neutral_{uuid.uuid4()}.mp4")
             logger.debug(f"    Neutralizing...")
-            self.liveportrait.neutralize(aligned_path, neutral_path, lip_ratio=0.0)
-            logger.debug(f"    Neutralized: {neutral_path}")
+            try:
+                self.liveportrait.neutralize(input_for_models, neutral_path, lip_ratio=0.0)
+                input_for_models = neutral_path
+                logger.debug(f"    Neutralized: {neutral_path}")
+            except Exception as e:
+                logger.warning(f"    Neutralization failed: {e}")
         else:
-            neutral_path = aligned_path
             logger.debug(f"    Skipping neutralization (use_neutralization=False)")
 
         # Lip-sync
         lipsync_path = os.path.join(tmpdir, f"lipsync_{uuid.uuid4()}.mp4")
         logger.debug(f"    Generating lip-sync...")
-        self.musetalk.process(neutral_path, audio_path, lipsync_path)
+        self.musetalk.process(input_for_models, audio_path, lipsync_path)
         logger.debug(f"    Lip-synced: {lipsync_path}")
 
         # Enhance
@@ -646,26 +647,40 @@ class LipSyncPipeline:
 
         if enhancement_mode == "codeformer":
             enhanced_path = os.path.join(tmpdir, f"enhanced_{uuid.uuid4()}.mp4")
-            blend_ratio = CodeFormer.compute_blend_ratio(align_metadata.avg_face_size)
+            blend_ratio = 0.7  # Default blend ratio
             logger.debug(f"    Enhancing with CodeFormer (blend_ratio={blend_ratio:.2f})...")
             self.codeformer.enhance_video(
                 lipsync_path,
                 enhanced_path,
                 blend_ratio=blend_ratio,
-                has_aligned=True,
+                has_aligned=False,
             )
+            processed_path = enhanced_path
             logger.debug(f"    Enhanced: {enhanced_path}")
         elif enhancement_mode == "fast":
             enhanced_path = os.path.join(tmpdir, f"enhanced_{uuid.uuid4()}.mp4")
             logger.debug(f"    Enhancing with fast mode...")
             self._fast_enhance_video(lipsync_path, enhanced_path)
+            processed_path = enhanced_path
             logger.debug(f"    Fast enhanced: {enhanced_path}")
         else:
-            enhanced_path = lipsync_path
+            processed_path = lipsync_path
+
+        # Paste back to original frame
+        pasted_path = os.path.join(tmpdir, f"pasted_{uuid.uuid4()}.mp4")
+        logger.debug(f"    Pasting back to original frame...")
+        paste_video_from_bbox(
+            processed_path,
+            video_path,
+            pasted_path,
+            crop_metadata,
+            feather_pixels=15,
+        )
+        logger.debug(f"    Pasted: {pasted_path}")
 
         # Copy to output
         logger.debug(f"    Copying to output: {output_path}")
-        shutil.copy(enhanced_path, output_path)
+        shutil.copy(pasted_path, output_path)
 
     def _extract_frames(self, video_path: str) -> List[np.ndarray]:
         """Extract all frames from video."""

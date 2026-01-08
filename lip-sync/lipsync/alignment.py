@@ -602,3 +602,208 @@ def align_image(
 
     logger.debug(f"align_image: Aligned to {aligned.shape[1]}x{aligned.shape[0]}")
     return aligned, M, landmarks
+
+
+# =============================================================================
+# Simple Bbox Crop/Paste (Alternative to Perspective Warp)
+# =============================================================================
+
+
+@dataclass
+class CropMetadata:
+    """Metadata from bbox crop for paste-back."""
+    fps: float
+    frame_count: int
+    original_width: int
+    original_height: int
+    crop_x1: int
+    crop_y1: int
+    crop_x2: int
+    crop_y2: int
+    crop_width: int
+    crop_height: int
+
+
+def crop_video_to_bbox(
+    input_path: str,
+    output_path: str,
+    bbox: Tuple[int, int, int, int],
+    margin: float = 0.5,
+) -> CropMetadata:
+    """
+    Crop video to a bbox region with margin.
+
+    This is a simpler alternative to perspective warp alignment.
+    Models will do their own face detection within the cropped region.
+
+    Args:
+        input_path: Path to input video
+        output_path: Path for cropped output video
+        bbox: Target face bounding box (x, y, w, h)
+        margin: Margin to add around bbox (as fraction of bbox size)
+
+    Returns:
+        CropMetadata with crop coordinates for paste-back
+    """
+    logger.info("=" * 50)
+    logger.info("CROP VIDEO TO BBOX - Starting")
+    logger.info("=" * 50)
+    logger.info(f"  Input: {input_path}")
+    logger.info(f"  Output: {output_path}")
+    logger.info(f"  Bbox: {bbox}")
+    logger.info(f"  Margin: {margin}")
+
+    start_time = time.time()
+
+    cap = cv2.VideoCapture(input_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    logger.info(f"  Video: {width}x{height} @ {fps:.2f}fps, {frame_count} frames")
+
+    # Calculate crop region with margin
+    x, y, w, h = bbox
+    margin_x = int(w * margin)
+    margin_y = int(h * margin)
+
+    crop_x1 = max(0, x - margin_x)
+    crop_y1 = max(0, y - margin_y)
+    crop_x2 = min(width, x + w + margin_x)
+    crop_y2 = min(height, y + h + margin_y)
+
+    crop_width = crop_x2 - crop_x1
+    crop_height = crop_y2 - crop_y1
+
+    logger.info(f"  Crop region: ({crop_x1}, {crop_y1}) to ({crop_x2}, {crop_y2})")
+    logger.info(f"  Crop size: {crop_width}x{crop_height}")
+
+    # Create output video
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (crop_width, crop_height))
+
+    frames_written = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Simple crop
+        cropped = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+        out.write(cropped)
+        frames_written += 1
+
+    cap.release()
+    out.release()
+
+    elapsed = time.time() - start_time
+    logger.info(f"  Frames written: {frames_written}")
+    logger.info(f"  Elapsed: {elapsed:.2f}s ({frames_written/max(elapsed, 0.01):.1f} fps)")
+    logger.info("CROP VIDEO TO BBOX - Complete")
+
+    return CropMetadata(
+        fps=fps,
+        frame_count=frames_written,
+        original_width=width,
+        original_height=height,
+        crop_x1=crop_x1,
+        crop_y1=crop_y1,
+        crop_x2=crop_x2,
+        crop_y2=crop_y2,
+        crop_width=crop_width,
+        crop_height=crop_height,
+    )
+
+
+def paste_video_from_bbox(
+    cropped_path: str,
+    source_path: str,
+    output_path: str,
+    metadata: CropMetadata,
+    feather_pixels: int = 10,
+) -> None:
+    """
+    Paste cropped video back into original video at bbox position.
+
+    Args:
+        cropped_path: Path to processed cropped video
+        source_path: Path to original source video
+        output_path: Path for output video
+        metadata: CropMetadata from crop_video_to_bbox
+        feather_pixels: Pixels to feather at edges for smooth blending
+    """
+    logger.info("=" * 50)
+    logger.info("PASTE VIDEO FROM BBOX - Starting")
+    logger.info("=" * 50)
+    logger.info(f"  Cropped: {cropped_path}")
+    logger.info(f"  Source: {source_path}")
+    logger.info(f"  Output: {output_path}")
+    logger.info(f"  Feather: {feather_pixels}px")
+
+    start_time = time.time()
+
+    cropped_cap = cv2.VideoCapture(cropped_path)
+    source_cap = cv2.VideoCapture(source_path)
+
+    fps = metadata.fps
+    width = metadata.original_width
+    height = metadata.original_height
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    # Create feathered mask for smooth blending at edges
+    mask = np.ones((metadata.crop_height, metadata.crop_width), dtype=np.float32)
+    if feather_pixels > 0:
+        # Feather the edges
+        for i in range(feather_pixels):
+            alpha = i / feather_pixels
+            # Top edge
+            mask[i, :] = min(mask[i, 0], alpha)
+            # Bottom edge
+            mask[-(i+1), :] = min(mask[-(i+1), 0], alpha)
+            # Left edge
+            mask[:, i] = np.minimum(mask[:, i], alpha)
+            # Right edge
+            mask[:, -(i+1)] = np.minimum(mask[:, -(i+1)], alpha)
+
+    mask_3ch = np.stack([mask] * 3, axis=-1)
+
+    frames_written = 0
+    while True:
+        ret_cropped, cropped_frame = cropped_cap.read()
+        ret_source, source_frame = source_cap.read()
+
+        if not ret_cropped or not ret_source:
+            break
+
+        # Resize cropped frame if dimensions don't match (shouldn't happen, but safety)
+        if cropped_frame.shape[:2] != (metadata.crop_height, metadata.crop_width):
+            cropped_frame = cv2.resize(cropped_frame, (metadata.crop_width, metadata.crop_height))
+
+        # Extract the region from source
+        source_region = source_frame[
+            metadata.crop_y1:metadata.crop_y2,
+            metadata.crop_x1:metadata.crop_x2
+        ]
+
+        # Blend with feathered mask
+        blended = (source_region.astype(np.float32) * (1 - mask_3ch) +
+                   cropped_frame.astype(np.float32) * mask_3ch)
+
+        # Paste back
+        result = source_frame.copy()
+        result[metadata.crop_y1:metadata.crop_y2, metadata.crop_x1:metadata.crop_x2] = blended.astype(np.uint8)
+
+        out.write(result)
+        frames_written += 1
+
+    cropped_cap.release()
+    source_cap.release()
+    out.release()
+
+    elapsed = time.time() - start_time
+    logger.info(f"  Frames written: {frames_written}")
+    logger.info(f"  Elapsed: {elapsed:.2f}s ({frames_written/max(elapsed, 0.01):.1f} fps)")
+    logger.info("PASTE VIDEO FROM BBOX - Complete")
