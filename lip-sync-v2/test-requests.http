@@ -1,25 +1,36 @@
-### Lip-Sync API Test Requests
-### Base URL
-@baseUrl = https://lijwq4hodxg0av-8000.proxy.runpod.net
+### Lip-Sync V2 API Test Requests
+### Uses Wav2Lip + GFPGAN (simpler than v1's MuseTalk/LivePortrait stack)
+
+### Base URL - Update to your deployment
+@baseUrl = http://localhost:8000
 
 ### Test Assets
 @refImage = https://replicate.delivery/pbxt/MNRKHnYUu5HjNqEerj2kxWRmUD3xWGaZ0gJmhqVbkra2jCbD/underwater.jpeg
 @videoUrl = https://replicate.delivery/czjl/xFIwsxPXTtpCHJw2WqLH3gqACg3csLVVdKtbLf1heBzXiUJUA/tmp35xuh600.mp4
 @audioUrl = https://replicate.delivery/pbxt/Nl3OAXz8mkiA0KFCoL1m7d6hWdrEGlXjN3hLFPpM7giMlvwi/every-person.mp3
 
+### =============================================================================
 ### Health Check
+### =============================================================================
 GET {{baseUrl}}/health
 
+### =============================================================================
 ### Root - List Endpoints
+### =============================================================================
 GET {{baseUrl}}/
 
-### Detect Faces
-POST {{baseUrl}}/detect-faces
+### =============================================================================
+### Face Tracking (Visual Validation)
+### Generates a video with bounding boxes to verify face detection
+### Use this to validate detection before running full lip-sync
+### =============================================================================
+# @timeout 120000
+POST {{baseUrl}}/face-tracking
 Content-Type: application/json
 
 {
   "video_url": "{{videoUrl}}",
-  "sample_fps": 3,
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
   "characters": [
     {
       "id": "speaker",
@@ -27,11 +38,14 @@ Content-Type: application/json
       "reference_image_url": "{{refImage}}"
     }
   ],
-  "similarity_threshold": 0.5
+  "similarity_threshold": 0.5,
+  "temporal_smoothing": 0.3
 }
 
-### Lip-Sync (requires presigned upload URL)
-# Detection is automatic - just provide reference images!
+### =============================================================================
+### Lip-Sync (Full Pipeline)
+### Wav2Lip + optional GFPGAN enhancement
+### =============================================================================
 # @timeout 300000
 POST {{baseUrl}}/lipsync
 Content-Type: application/json
@@ -39,7 +53,7 @@ Content-Type: application/json
 {
   "video_url": "{{videoUrl}}",
   "audio_url": "{{audioUrl}}",
-  "upload_url": "https://files.biz.dev.scenema.ai/scenema-ai-dev/admin/2026-01-08/1767845143667-lip-sync-test-10?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=minioadmin%2F20260108%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260108T040543Z&X-Amz-Expires=86400&X-Amz-Signature=b72fe84962d21933e687494a90916f23f579a78a8a31b517487e7ac8a9c93c6d&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-id=PutObject",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
   "characters": [
     {
       "id": "speaker",
@@ -47,9 +61,58 @@ Content-Type: application/json
       "reference_image_url": "{{refImage}}"
     }
   ],
+  "similarity_threshold": 0.5,
   "enhance_quality": true,
-  "fidelity_weight": 0.7
+  "temporal_smoothing": 0.3
 }
 
+### =============================================================================
+### Lip-Sync - Multiple Characters
+### =============================================================================
+# @timeout 300000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
 
-###https://files.biz.dev.scenema.ai/scenema-ai-dev/admin/2026-01-07/1767809894405-lip-sync-test-2?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=minioadmin%2F20260107%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260107T181814Z&X-Amz-Expires=86400&X-Amz-Signature=09ff038dd3a6c66ee1ecbb37ec0e241b342de6addccd4fd08f57b03e4d58f394&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "char_1",
+      "name": "Character 1",
+      "reference_image_url": "https://example.com/char1.jpg"
+    },
+    {
+      "id": "char_2",
+      "name": "Character 2",
+      "reference_image_url": "https://example.com/char2.jpg"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": true,
+  "temporal_smoothing": 0.3
+}
+
+### =============================================================================
+### Lip-Sync - No Enhancement (Faster)
+### =============================================================================
+# @timeout 180000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": false,
+  "temporal_smoothing": 0.3
+}
