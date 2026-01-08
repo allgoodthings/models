@@ -150,7 +150,10 @@ jobs:
             opencv-python-headless \
             pydantic \
             insightface \
-            onnxruntime
+            onnxruntime \
+            httpx \
+            fastapi \
+            uvicorn
 
       - name: Run CPU validation
         working-directory: lip-sync-v2
