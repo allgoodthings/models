@@ -1,5 +1,5 @@
 # Lip-Sync V2 Pipeline
-# InsightFace face tracking + Wav2Lip-HD lip-sync + GFPGAN enhancement
+# InsightFace face tracking + Wav2Lip lip-sync + GFPGAN enhancement
 #
 # Build:
 #   docker build -t lip-sync-v2:latest .
@@ -12,7 +12,7 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 # Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies
+# System dependencies (matching v1)
 RUN apt-get update && apt-get install -y \
     python3.11 \
     python3.11-venv \
@@ -24,8 +24,11 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     git \
+    git-lfs \
     curl \
     wget \
+    cmake \
+    build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -39,6 +42,11 @@ ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
+# Clone Wav2Lip and GFPGAN repositories FIRST (better layer caching)
+RUN mkdir -p /app/vendors/wav2lip-hd && \
+    git clone --depth 1 https://github.com/Rudrabha/Wav2Lip.git /app/vendors/wav2lip-hd/Wav2Lip-master && \
+    git clone --depth 1 https://github.com/TencentARC/GFPGAN.git /app/vendors/wav2lip-hd/GFPGAN-master
+
 # Install PyTorch with CUDA support (pinned version for CUDA 12.4)
 RUN uv pip install --system --no-cache \
     torch==2.5.1 \
@@ -47,6 +55,7 @@ RUN uv pip install --system --no-cache \
     --index-url https://download.pytorch.org/whl/cu124
 
 # Install face detection and processing packages
+# Note: onnxruntime-gpu 1.19+ required for CUDA 12
 RUN uv pip install --system --no-cache \
     onnxruntime-gpu>=1.19.0 \
     insightface>=0.7.3 \
@@ -75,21 +84,25 @@ RUN uv pip install --system --no-cache \
     pydantic>=2.5.0 \
     pillow>=10.0.0 \
     av>=10.0.0 \
-    ffmpeg-python>=0.2.0
+    ffmpeg-python>=0.2.0 \
+    huggingface-hub>=0.19.0 \
+    requests>=2.31.0
 
-# Clone Wav2Lip and GFPGAN repositories
-RUN mkdir -p /app/vendors/wav2lip-hd && \
-    git clone --depth 1 https://github.com/Rudrabha/Wav2Lip.git /app/vendors/wav2lip-hd/Wav2Lip-master && \
-    git clone --depth 1 https://github.com/TencentARC/GFPGAN.git /app/vendors/wav2lip-hd/GFPGAN-master
-
-# Copy source code
+# Copy source code and scripts
 COPY lipsync/ ./lipsync/
+COPY scripts/ ./scripts/
+
+# Copy requirements.txt if it exists (for any additional dependencies)
+COPY requirements.txt* ./
+RUN if [ -f requirements.txt ]; then uv pip install --system --no-cache -r requirements.txt; fi
 
 # Create models directory
 RUN mkdir -p /app/models
 
-# Download Wav2Lip checkpoint (~400MB)
+# Download model weights
 ARG SKIP_MODEL_DOWNLOAD=false
+
+# Download Wav2Lip checkpoint (~400MB)
 RUN if [ "$SKIP_MODEL_DOWNLOAD" = "false" ]; then \
     echo "Downloading Wav2Lip checkpoint..." && \
     wget -q "https://iiitaphyd-my.sharepoint.com/personal/radrabha_m_research_iiit_ac_in/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fradrabha%5Fm%5Fresearch%5Fiiit%5Fac%5Fin%2FDocuments%2FWav2Lip%5FModels%2Fwav2lip%5Fgan%2Epth" -O /app/models/wav2lip_gan.pth || \
@@ -117,7 +130,7 @@ app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
 app.prepare(ctx_id=-1); \
 print('InsightFace model downloaded successfully')"
 
-# Set environment
+# Set environment - PYTHONPATH must include Wav2Lip for imports
 ENV PYTHONPATH=/app:/app/vendors/wav2lip-hd/Wav2Lip-master
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_VISIBLE_DEVICES=0
@@ -128,8 +141,8 @@ ENV MODELS_DIR=/app/models
 # Server port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+# Health check (longer start-period for model loading)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Preload models on startup
