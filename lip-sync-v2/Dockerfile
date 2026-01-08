@@ -47,6 +47,9 @@ RUN mkdir -p /app/vendors/wav2lip-hd && \
     git clone --depth 1 https://github.com/Rudrabha/Wav2Lip.git /app/vendors/wav2lip-hd/Wav2Lip-master && \
     git clone --depth 1 https://github.com/TencentARC/GFPGAN.git /app/vendors/wav2lip-hd/GFPGAN-master
 
+# Copy patched inference.py with --bbox_file support for per-frame bounding boxes
+COPY patches/wav2lip_inference.py /app/vendors/wav2lip-hd/Wav2Lip-master/inference.py
+
 # Install PyTorch with CUDA support (pinned version for CUDA 12.4)
 RUN uv pip install --system --no-cache \
     torch==2.5.1 \

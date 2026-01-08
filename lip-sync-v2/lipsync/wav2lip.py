@@ -136,7 +136,14 @@ class Wav2LipHD:
         output_path: str,
         bbox_file: Optional[str] = None,
     ):
-        """Run Wav2Lip inference."""
+        """Run Wav2Lip inference.
+
+        Args:
+            video_path: Input video path
+            audio_path: Input audio path
+            output_path: Output video path
+            bbox_file: Optional JSON file with per-frame bounding boxes
+        """
         cmd = [
             "python",
             str(WAV2LIP_DIR / "inference.py"),
@@ -150,6 +157,7 @@ class Wav2LipHD:
             "--pads", *[str(p) for p in self.config.pads],
         ]
 
+        # Use per-frame bboxes if provided (our patched inference.py)
         if bbox_file:
             cmd.extend(["--bbox_file", bbox_file])
 
