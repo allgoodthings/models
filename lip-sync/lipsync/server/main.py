@@ -591,10 +591,13 @@ async def lipsync(request: LipSyncRequest):
             await download_file(request.audio_url, audio_path)
 
             # Download and register reference images for face matching
+            face_detector.clear_references()  # Clear any previous references
             for char in request.characters:
                 ref_img = await download_image(char.reference_image_url)
-                face_detector.register_reference(char.id, ref_img)
-                logger.info(f"    Registered reference for {char.id}")
+                if face_detector.load_reference(char.id, ref_img):
+                    logger.info(f"    Registered reference for {char.id}")
+                else:
+                    logger.warning(f"    Failed to register reference for {char.id}")
 
             timing["download_ms"] = int((time.time() - download_start) * 1000)
         except Exception as e:
