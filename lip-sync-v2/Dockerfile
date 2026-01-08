@@ -77,8 +77,10 @@ RUN uv pip install --system --no-cache \
     av>=10.0.0 \
     ffmpeg-python>=0.2.0
 
-# Copy Wav2Lip-HD vendor code (includes modifications for per-frame bbox)
-COPY vendors/ ./vendors/
+# Clone Wav2Lip and GFPGAN repositories
+RUN mkdir -p /app/vendors/wav2lip-hd && \
+    git clone --depth 1 https://github.com/Rudrabha/Wav2Lip.git /app/vendors/wav2lip-hd/Wav2Lip-master && \
+    git clone --depth 1 https://github.com/TencentARC/GFPGAN.git /app/vendors/wav2lip-hd/GFPGAN-master
 
 # Copy source code
 COPY lipsync/ ./lipsync/
