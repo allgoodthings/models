@@ -478,8 +478,6 @@ def unalign_video(
 
     start_time = time.time()
 
-    from skimage import exposure
-
     aligned_cap = cv2.VideoCapture(aligned_path)
     source_cap = cv2.VideoCapture(source_path)
 
@@ -501,7 +499,7 @@ def unalign_video(
             unaligned = aligner.unalign_face(aligned_frame, M, original_shape)
             unaligned = cv2.resize(unaligned, (source_frame.shape[1], source_frame.shape[0]))
 
-            # Create face mask
+            # Create face mask from landmarks
             mask = np.zeros(source_frame.shape[:2], dtype=np.uint8)
             if len(landmarks) > 0:
                 hull = cv2.convexHull(landmarks.astype(np.int32))
@@ -511,10 +509,25 @@ def unalign_video(
             mask_float = mask.astype(np.float32) / 255.0
             mask_3ch = np.repeat(mask_float[:, :, np.newaxis], 3, axis=2)
 
-            # Histogram matching for color consistency
+            # Color match only the face region (not the entire unaligned image which is mostly black)
+            # This avoids histogram matching artifacts from the black border pixels
             try:
-                unaligned = exposure.match_histograms(unaligned, source_frame, channel_axis=2)
-            except:
+                face_mask_bool = mask > 127  # Binary mask for face region
+                if np.any(face_mask_bool):
+                    # Extract face regions
+                    face_region_src = source_frame[face_mask_bool]
+                    face_region_unaligned = unaligned[face_mask_bool]
+
+                    # Simple mean color matching (much more robust than histogram matching)
+                    src_mean = np.mean(face_region_src, axis=0)
+                    unaligned_mean = np.mean(face_region_unaligned, axis=0)
+
+                    # Apply color shift to the face region only
+                    color_diff = src_mean - unaligned_mean
+                    unaligned_adjusted = unaligned.astype(np.float32)
+                    unaligned_adjusted[face_mask_bool] += color_diff
+                    unaligned = np.clip(unaligned_adjusted, 0, 255).astype(np.uint8)
+            except Exception:
                 pass
 
             result = source_frame * (1 - mask_3ch) + unaligned * mask_3ch
