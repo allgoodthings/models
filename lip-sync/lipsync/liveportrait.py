@@ -648,7 +648,8 @@ class LivePortrait:
 
                 # Expand source features to match batch size
                 batch_len = len(valid_indices)
-                feature_3d_expanded = source_info['feature_3d'].expand(batch_len, -1, -1, -1)
+                # feature_3d is 5D: [1, 32, 16, 64, 64] - expand first dim only
+                feature_3d_expanded = source_info['feature_3d'].expand(batch_len, *source_info['feature_3d'].shape[1:])
 
                 # Expand kp_source to batch
                 kp_source_expanded = {}
