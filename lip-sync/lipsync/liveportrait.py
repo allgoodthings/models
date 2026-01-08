@@ -15,13 +15,12 @@ Cropper.crop_source_image(image) returns dict with keys:
 - pt_crop: crop points
 
 LivePortraitWrapper methods:
-- extract_feature_3d(img_tensor) -> feature_3d tensor
+- extract_feature_3d(img_tensor) -> feature_3d tensor [B, 32, 16, 64, 64]
 - get_kp_info(img_tensor) -> dict with 'kp' key (BxNx3 keypoints)
-- warp_decode(feature_3d, kp_source, kp_driving) -> output tensor
-- retarget_lip(kp_source, lip_close_ratio) -> delta tensor
+- warp_decode(feature_3d, kp_source, kp_driving) -> dict with 'out' key (tensor [B, C, H, W])
+- retarget_lip(kp_source, lip_close_ratio) -> delta tensor [B, N, 3] (already reshaped)
   - kp_source: BxNx3 tensor
   - lip_close_ratio: Bx2 tensor (combined source+driving ratios)
-  - returns: Bx(3*num_kp) delta to reshape and add to keypoints
 - calc_ratio(lmk_lst) -> (eye_ratios, lip_ratios) lists
 - calc_combined_lip_ratio(driving_lip_ratio, source_landmarks) -> Bx2 tensor
 
@@ -466,8 +465,8 @@ class LivePortrait:
                 )
 
                 # Convert output tensor to numpy RGB
-                # Output is [B, C, H, W] in [0, 1] range
-                out_np = output.squeeze(0).permute(1, 2, 0).cpu().float().numpy()
+                # warp_decode returns dict with 'out' key, tensor is [B, C, H, W] in [0, 1] range
+                out_np = output['out'].squeeze(0).permute(1, 2, 0).cpu().float().numpy()
                 out_np = (out_np * 255).clip(0, 255).astype(np.uint8)
 
             # Paste back into original frame
@@ -667,10 +666,12 @@ class LivePortrait:
                 )
 
             # Convert outputs to numpy and paste back
+            # warp_decode returns a dict with 'out' key containing the tensor
+            out_batch = outputs['out']
             batch_results = [None] * len(batch_frames)
 
             for out_idx, valid_idx in enumerate(valid_indices):
-                out_tensor = outputs[out_idx]
+                out_tensor = out_batch[out_idx]
                 out_np = out_tensor.permute(1, 2, 0).cpu().float().numpy()
                 out_np = (out_np * 255).clip(0, 255).astype(np.uint8)
 
