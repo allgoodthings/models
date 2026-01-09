@@ -2,7 +2,7 @@
 ### Uses Wav2Lip + GFPGAN (simpler than v1's MuseTalk/LivePortrait stack)
 
 ### Base URL - Update to your deployment
-@baseUrl = http://localhost:8000
+@baseUrl = https://h0j2bzv0ewfg0w-8000.proxy.runpod.net
 
 ### Test Assets
 @refImage = https://replicate.delivery/pbxt/MNRKHnYUu5HjNqEerj2kxWRmUD3xWGaZ0gJmhqVbkra2jCbD/underwater.jpeg
@@ -43,8 +43,8 @@ Content-Type: application/json
 }
 
 ### =============================================================================
-### Lip-Sync (Full Pipeline)
-### Wav2Lip + optional GFPGAN enhancement
+### Lip-Sync (Full Pipeline) - Crossfade Loop (Default)
+### Wav2Lip + GFPGAN + Poisson blending + crossfade at loop boundaries
 ### =============================================================================
 # @timeout 300000
 POST {{baseUrl}}/lipsync
@@ -63,6 +63,108 @@ Content-Type: application/json
   ],
   "similarity_threshold": 0.5,
   "enhance_quality": true,
+  "loop_mode": "crossfade",
+  "crossfade_frames": 10,
+  "temporal_smoothing": 0.3
+}
+
+### =============================================================================
+### Lip-Sync - No Loop (Trim to Shortest)
+### Good for action films where looping doesn't make sense
+### =============================================================================
+# @timeout 300000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": true,
+  "loop_mode": "none",
+  "temporal_smoothing": 0.3
+}
+
+### =============================================================================
+### Lip-Sync - Ping-Pong Loop
+### Forward-backward oscillation - good for portraits/talking heads
+### =============================================================================
+# @timeout 300000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": true,
+  "loop_mode": "pingpong",
+  "temporal_smoothing": 0.3
+}
+
+### =============================================================================
+### Lip-Sync - Hard Repeat Loop
+### Simple modulo wrap (may have visible jump at loop point)
+### =============================================================================
+# @timeout 300000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": true,
+  "loop_mode": "repeat",
+  "temporal_smoothing": 0.3
+}
+
+### =============================================================================
+### Lip-Sync - No Enhancement (Faster, Lower Quality)
+### Skip GFPGAN for faster processing
+### =============================================================================
+# @timeout 180000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": false,
+  "loop_mode": "crossfade",
   "temporal_smoothing": 0.3
 }
 
@@ -91,28 +193,7 @@ Content-Type: application/json
   ],
   "similarity_threshold": 0.5,
   "enhance_quality": true,
-  "temporal_smoothing": 0.3
-}
-
-### =============================================================================
-### Lip-Sync - No Enhancement (Faster)
-### =============================================================================
-# @timeout 180000
-POST {{baseUrl}}/lipsync
-Content-Type: application/json
-
-{
-  "video_url": "{{videoUrl}}",
-  "audio_url": "{{audioUrl}}",
-  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
-  "characters": [
-    {
-      "id": "speaker",
-      "name": "Speaker",
-      "reference_image_url": "{{refImage}}"
-    }
-  ],
-  "similarity_threshold": 0.5,
-  "enhance_quality": false,
+  "loop_mode": "crossfade",
+  "crossfade_frames": 10,
   "temporal_smoothing": 0.3
 }

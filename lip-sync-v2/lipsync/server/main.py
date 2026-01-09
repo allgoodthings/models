@@ -435,6 +435,8 @@ async def lipsync(request: LipSyncRequest):
                     output_path=char_output,
                     bboxes=char_bboxes,
                     enhance=request.enhance_quality,
+                    loop_mode=request.loop_mode,
+                    crossfade_frames=request.crossfade_frames,
                 )
 
                 # Use this output as input for next character

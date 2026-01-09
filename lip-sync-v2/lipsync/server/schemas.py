@@ -2,7 +2,7 @@
 Pydantic schemas for lip-sync API.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +49,22 @@ class LipSyncRequest(BaseModel):
     )
     enhance_quality: bool = Field(
         True, description="Apply GFPGAN enhancement after lip-sync"
+    )
+    loop_mode: Literal["none", "repeat", "pingpong", "crossfade"] = Field(
+        "crossfade",
+        description=(
+            "How to handle audio longer than video: "
+            "'none' = trim to shortest, "
+            "'repeat' = loop video with hard cut, "
+            "'pingpong' = forward-backward loop (good for portraits), "
+            "'crossfade' = loop with smooth blend at boundaries (default)"
+        ),
+    )
+    crossfade_frames: int = Field(
+        10,
+        description="Number of frames to crossfade at loop boundary (only for crossfade mode)",
+        ge=1,
+        le=30,
     )
     temporal_smoothing: float = Field(
         0.3,

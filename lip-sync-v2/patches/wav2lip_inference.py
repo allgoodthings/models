@@ -10,33 +10,33 @@ import platform
 
 parser = argparse.ArgumentParser(description='Inference code to lip-sync videos in the wild using Wav2Lip models')
 
-parser.add_argument('--checkpoint_path', type=str, 
+parser.add_argument('--checkpoint_path', type=str,
 					help='Name of saved checkpoint to load weights from', required=True)
 
-parser.add_argument('--face', type=str, 
+parser.add_argument('--face', type=str,
 					help='Filepath of video/image that contains faces to use', required=True)
-parser.add_argument('--audio', type=str, 
+parser.add_argument('--audio', type=str,
 					help='Filepath of video/audio file to use as raw audio source', required=True)
-parser.add_argument('--outfile', type=str, help='Video path to save result. See default for an e.g.', 
+parser.add_argument('--outfile', type=str, help='Video path to save result. See default for an e.g.',
 								default='results/result_voice.mp4')
 
-parser.add_argument('--static', type=bool, 
+parser.add_argument('--static', type=bool,
 					help='If True, then use only first video frame for inference', default=False)
-parser.add_argument('--fps', type=float, help='Can be specified only if input is a static image (default: 25)', 
+parser.add_argument('--fps', type=float, help='Can be specified only if input is a static image (default: 25)',
 					default=25., required=False)
 
-parser.add_argument('--pads', nargs='+', type=int, default=[0, 10, 0, 0], 
+parser.add_argument('--pads', nargs='+', type=int, default=[0, 10, 0, 0],
 					help='Padding (top, bottom, left, right). Please adjust to include chin at least')
 
-parser.add_argument('--face_det_batch_size', type=int, 
+parser.add_argument('--face_det_batch_size', type=int,
 					help='Batch size for face detection', default=16)
 parser.add_argument('--wav2lip_batch_size', type=int, help='Batch size for Wav2Lip model(s)', default=128)
 
-parser.add_argument('--resize_factor', default=1, type=int, 
+parser.add_argument('--resize_factor', default=1, type=int,
 			help='Reduce the resolution by this factor. Sometimes, best results are obtained at 480p or 720p')
 
-parser.add_argument('--crop', nargs='+', type=int, default=[0, -1, 0, -1], 
-					help='Crop video to a smaller region (top, bottom, left, right). Applied after resize_factor and rotate arg. ' 
+parser.add_argument('--crop', nargs='+', type=int, default=[0, -1, 0, -1],
+					help='Crop video to a smaller region (top, bottom, left, right). Applied after resize_factor and rotate arg. '
 					'Useful if multiple face present. -1 implies the value will be auto-inferred based on height, width')
 
 parser.add_argument('--box', nargs='+', type=int, default=[-1, -1, -1, -1],
@@ -54,6 +54,15 @@ parser.add_argument('--rotate', default=False, action='store_true',
 parser.add_argument('--nosmooth', default=False, action='store_true',
 					help='Prevent smoothing face detections over a short temporal window')
 
+# Loop mode arguments
+parser.add_argument('--loop_mode', type=str, default='crossfade',
+					choices=['none', 'repeat', 'pingpong', 'crossfade'],
+					help='How to handle audio longer than video: none=trim, repeat=hard loop, '
+					'pingpong=forward-backward, crossfade=smooth blend at boundaries')
+
+parser.add_argument('--crossfade_frames', type=int, default=10,
+					help='Number of frames to crossfade at loop boundary (only for crossfade mode)')
+
 args = parser.parse_args()
 args.img_size = 96
 
@@ -70,18 +79,18 @@ def get_smoothened_boxes(boxes, T):
 	return boxes
 
 def face_detect(images):
-	detector = face_detection.FaceAlignment(face_detection.LandmarksType._2D, 
+	detector = face_detection.FaceAlignment(face_detection.LandmarksType._2D,
 											flip_input=False, device=device)
 
 	batch_size = args.face_det_batch_size
-	
+
 	while 1:
 		predictions = []
 		try:
 			for i in tqdm(range(0, len(images), batch_size)):
 				predictions.extend(detector.get_detections_for_batch(np.array(images[i:i + batch_size])))
 		except RuntimeError:
-			if batch_size == 1: 
+			if batch_size == 1:
 				raise RuntimeError('Image too big to run face detection on GPU. Please use the --resize_factor argument')
 			batch_size //= 2
 			print('Recovering from OOM error; New batch size: {}'.format(batch_size))
@@ -99,7 +108,7 @@ def face_detect(images):
 		y2 = min(image.shape[0], rect[3] + pady2)
 		x1 = max(0, rect[0] - padx1)
 		x2 = min(image.shape[1], rect[2] + padx2)
-		
+
 		results.append([x1, y1, x2, y2])
 
 	boxes = np.array(results)
@@ -107,59 +116,98 @@ def face_detect(images):
 	results = [[image[y1: y2, x1:x2], (y1, y2, x1, x2)] for image, (x1, y1, x2, y2) in zip(images, boxes)]
 
 	del detector
-	return results 
+	return results
 
-def datagen(frames, mels):
-	img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
 
-	# Per-frame bbox file takes precedence
-	if args.bbox_file is not None:
-		print('Using per-frame bounding boxes from file...')
-		with open(args.bbox_file, 'r') as f:
-			per_frame_boxes = json.load(f)
+def get_frame_index(output_idx, num_frames, loop_mode):
+	"""
+	Get the source frame index for a given output index based on loop mode.
 
-		face_det_results = []
-		frames_needing_detection = []
-		detection_indices = []
+	Returns: (frame_idx, crossfade_alpha, secondary_frame_idx)
+		- frame_idx: primary frame to use
+		- crossfade_alpha: 0-1 blend factor (1 = fully primary, <1 = blend with secondary)
+		- secondary_frame_idx: frame to blend with (for crossfade mode)
+	"""
+	if loop_mode == 'none':
+		# No looping - just return the index (will be clamped by caller)
+		return output_idx, 1.0, None
 
-		for i, frame in enumerate(frames):
-			if i < len(per_frame_boxes) and per_frame_boxes[i] is not None:
-				y1, y2, x1, x2 = per_frame_boxes[i]
-				face_det_results.append([frame[y1:y2, x1:x2], (y1, y2, x1, x2)])
-			else:
-				# Mark for face detection fallback
-				frames_needing_detection.append(frame)
-				detection_indices.append(i)
-				face_det_results.append(None)  # Placeholder
+	elif loop_mode == 'repeat':
+		# Simple modulo wrap
+		return output_idx % num_frames, 1.0, None
 
-		# Run face detection on frames without bbox
-		if frames_needing_detection:
-			print(f'Running face detection on {len(frames_needing_detection)} frames without bbox...')
-			detected = face_detect(frames_needing_detection)
-			for idx, det in zip(detection_indices, detected):
-				face_det_results[idx] = det
+	elif loop_mode == 'pingpong':
+		# Forward-backward oscillation
+		cycle_length = (num_frames - 1) * 2 if num_frames > 1 else 1
+		pos = output_idx % cycle_length
 
-	elif args.box[0] == -1:
-		if not args.static:
-			face_det_results = face_detect(frames) # BGR2RGB for CNN face detection
+		if pos < num_frames:
+			return pos, 1.0, None  # Forward
 		else:
-			face_det_results = face_detect([frames[0]])
-	else:
-		print('Using the specified bounding box instead of face detection...')
-		y1, y2, x1, x2 = args.box
-		face_det_results = [[f[y1: y2, x1:x2], (y1, y2, x1, x2)] for f in frames]
+			return cycle_length - pos, 1.0, None  # Backward
+
+	elif loop_mode == 'crossfade':
+		# Repeat with crossfade at boundaries
+		base_idx = output_idx % num_frames
+
+		# Check if we're near a loop boundary
+		frames_until_loop = num_frames - base_idx
+		crossfade_frames = args.crossfade_frames
+
+		if frames_until_loop <= crossfade_frames and num_frames > crossfade_frames:
+			# We're in the crossfade zone approaching the loop point
+			# Blend current frame with the corresponding frame from start of next cycle
+			alpha = frames_until_loop / crossfade_frames
+			secondary_idx = crossfade_frames - frames_until_loop
+			return base_idx, alpha, secondary_idx
+		else:
+			return base_idx, 1.0, None
+
+	return output_idx % num_frames, 1.0, None
+
+
+def datagen(frames, mels, face_det_results, loop_mode):
+	"""Generate batches for Wav2Lip inference with loop mode support."""
+	img_batch, mel_batch, frame_batch, coords_batch, blend_info_batch = [], [], [], [], []
+
+	num_frames = len(frames)
 
 	for i, m in enumerate(mels):
-		idx = 0 if args.static else i%len(frames)
+		if args.static:
+			idx, alpha, secondary_idx = 0, 1.0, None
+		else:
+			idx, alpha, secondary_idx = get_frame_index(i, num_frames, loop_mode)
+
+		# Get primary frame
 		frame_to_save = frames[idx].copy()
-		face, coords = face_det_results[idx].copy()
+		face, coords = face_det_results[idx]
+		face = face.copy()
+
+		# Handle crossfade blending at loop boundaries
+		if alpha < 1.0 and secondary_idx is not None:
+			secondary_frame = frames[secondary_idx].copy()
+			# Blend frames
+			frame_to_save = cv2.addWeighted(
+				frame_to_save, alpha,
+				secondary_frame, 1 - alpha,
+				0
+			)
+			# Also need to blend face crops for smooth transition
+			secondary_face, _ = face_det_results[secondary_idx]
+			if secondary_face.shape == face.shape:
+				face = cv2.addWeighted(
+					face.astype(np.float32), alpha,
+					secondary_face.astype(np.float32), 1 - alpha,
+					0
+				).astype(np.uint8)
 
 		face = cv2.resize(face, (args.img_size, args.img_size))
-			
+
 		img_batch.append(face)
 		mel_batch.append(m)
 		frame_batch.append(frame_to_save)
 		coords_batch.append(coords)
+		blend_info_batch.append((alpha, secondary_idx))
 
 		if len(img_batch) >= args.wav2lip_batch_size:
 			img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)
@@ -170,8 +218,8 @@ def datagen(frames, mels):
 			img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 			mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
 
-			yield img_batch, mel_batch, frame_batch, coords_batch
-			img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
+			yield img_batch, mel_batch, frame_batch, coords_batch, blend_info_batch
+			img_batch, mel_batch, frame_batch, coords_batch, blend_info_batch = [], [], [], [], []
 
 	if len(img_batch) > 0:
 		img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)
@@ -182,7 +230,69 @@ def datagen(frames, mels):
 		img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 		mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
 
-		yield img_batch, mel_batch, frame_batch, coords_batch
+		yield img_batch, mel_batch, frame_batch, coords_batch, blend_info_batch
+
+
+def poisson_blend(src, dst, coords):
+	"""
+	Blend source face region into destination frame using Poisson blending.
+	Falls back to feathered blending if Poisson fails.
+	"""
+	y1, y2, x1, x2 = coords
+	h, w = src.shape[:2]
+
+	# Poisson blending requires the source to fit entirely within destination
+	# and works best with an elliptical mask
+	try:
+		# Create elliptical mask for more natural blending
+		mask = np.zeros((h, w), dtype=np.uint8)
+		center = (w // 2, h // 2)
+		axes = (w // 2 - 2, h // 2 - 2)  # Slightly smaller than full size
+		cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+
+		# Ensure mask has some feathering at edges
+		mask = cv2.GaussianBlur(mask, (7, 7), 3)
+
+		# Center point in destination
+		dst_center = ((x1 + x2) // 2, (y1 + y2) // 2)
+
+		# Poisson seamless clone
+		result = cv2.seamlessClone(src, dst, mask, dst_center, cv2.NORMAL_CLONE)
+		return result
+
+	except cv2.error as e:
+		# Fall back to feathered blending if Poisson fails
+		# (can happen with edge cases, small regions, etc.)
+		return feathered_blend(src, dst, coords)
+
+
+def feathered_blend(src, dst, coords):
+	"""Fallback feathered blending when Poisson fails."""
+	y1, y2, x1, x2 = coords
+	h, w = src.shape[:2]
+
+	mask = np.ones((h, w), dtype=np.float32)
+	feather = min(15, h // 6, w // 6)
+
+	if feather > 1:
+		for i in range(feather):
+			alpha = i / feather
+			mask[i, :] = min(mask[i, 0], alpha)
+			mask[h - 1 - i, :] = min(mask[h - 1 - i, 0], alpha)
+			mask[:, i] = np.minimum(mask[:, i], alpha)
+			mask[:, w - 1 - i] = np.minimum(mask[:, w - 1 - i], alpha)
+
+		mask = mask[:, :, np.newaxis]
+		original = dst[y1:y2, x1:x2].astype(np.float32)
+		blended = (src.astype(np.float32) * mask + original * (1 - mask)).astype(np.uint8)
+		result = dst.copy()
+		result[y1:y2, x1:x2] = blended
+		return result
+	else:
+		result = dst.copy()
+		result[y1:y2, x1:x2] = src
+		return result
+
 
 mel_step_size = 16
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -260,7 +370,7 @@ def main():
 		raise ValueError('Mel contains nan! Using a TTS voice? Add a small epsilon noise to the wav file and try again')
 
 	mel_chunks = []
-	mel_idx_multiplier = 80./fps 
+	mel_idx_multiplier = 80./fps
 	i = 0
 	while 1:
 		start_idx = int(i * mel_idx_multiplier)
@@ -271,20 +381,61 @@ def main():
 		i += 1
 
 	print("Length of mel chunks: {}".format(len(mel_chunks)))
+	print("Loop mode: {}".format(args.loop_mode))
 
-	full_frames = full_frames[:len(mel_chunks)]
+	# Handle loop_mode == 'none': trim to shortest
+	if args.loop_mode == 'none':
+		output_length = min(len(full_frames), len(mel_chunks))
+		mel_chunks = mel_chunks[:output_length]
+		print(f"Trimmed to {output_length} frames (loop_mode=none)")
+
+	# Pre-compute face detection results for all frames
+	print('Detecting faces in all frames...')
+	if args.bbox_file is not None:
+		print('Using per-frame bounding boxes from file...')
+		with open(args.bbox_file, 'r') as f:
+			per_frame_boxes = json.load(f)
+
+		face_det_results = []
+		frames_needing_detection = []
+		detection_indices = []
+
+		for i, frame in enumerate(full_frames):
+			if i < len(per_frame_boxes) and per_frame_boxes[i] is not None:
+				y1, y2, x1, x2 = per_frame_boxes[i]
+				face_det_results.append([frame[y1:y2, x1:x2], (y1, y2, x1, x2)])
+			else:
+				frames_needing_detection.append(frame)
+				detection_indices.append(i)
+				face_det_results.append(None)
+
+		if frames_needing_detection:
+			print(f'Running face detection on {len(frames_needing_detection)} frames without bbox...')
+			detected = face_detect(frames_needing_detection)
+			for idx, det in zip(detection_indices, detected):
+				face_det_results[idx] = det
+
+	elif args.box[0] == -1:
+		if not args.static:
+			face_det_results = face_detect(full_frames)
+		else:
+			face_det_results = face_detect([full_frames[0]])
+	else:
+		print('Using the specified bounding box instead of face detection...')
+		y1, y2, x1, x2 = args.box
+		face_det_results = [[f[y1: y2, x1:x2], (y1, y2, x1, x2)] for f in full_frames]
 
 	batch_size = args.wav2lip_batch_size
-	gen = datagen(full_frames.copy(), mel_chunks)
+	gen = datagen(full_frames, mel_chunks, face_det_results, args.loop_mode)
 
-	for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen, 
+	for i, (img_batch, mel_batch, frames, coords, blend_info) in enumerate(tqdm(gen,
 											total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
 		if i == 0:
 			model = load_model(args.checkpoint_path)
 			print ("Model loaded")
 
 			frame_h, frame_w = full_frames[0].shape[:-1]
-			out = cv2.VideoWriter('temp/result.avi', 
+			out = cv2.VideoWriter('temp/result.avi',
 									cv2.VideoWriter_fourcc(*'DIVX'), fps, (frame_w, frame_h))
 
 		img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(device)
@@ -295,40 +446,13 @@ def main():
 
 		pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
 
-		for p, f, c in zip(pred, frames, coords):
+		for p, f, c, bi in zip(pred, frames, coords, blend_info):
 			y1, y2, x1, x2 = c
 			p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
 
-			# Feathered blending to avoid hard rectangular edges
-			# Create a soft mask that fades at the edges
-			h, w = p.shape[:2]
-			mask = np.ones((h, w), dtype=np.float32)
-
-			# Feather size (pixels from edge to start fading)
-			feather = min(15, h // 6, w // 6)
-
-			if feather > 1:
-				# Create gradient at edges
-				for i in range(feather):
-					alpha = i / feather
-					# Top edge
-					mask[i, :] = min(mask[i, 0], alpha)
-					# Bottom edge
-					mask[h - 1 - i, :] = min(mask[h - 1 - i, 0], alpha)
-					# Left edge
-					mask[:, i] = np.minimum(mask[:, i], alpha)
-					# Right edge
-					mask[:, w - 1 - i] = np.minimum(mask[:, w - 1 - i], alpha)
-
-				# Apply feathered blend
-				mask = mask[:, :, np.newaxis]  # Add channel dimension
-				original = f[y1:y2, x1:x2].astype(np.float32)
-				blended = (p.astype(np.float32) * mask + original * (1 - mask)).astype(np.uint8)
-				f[y1:y2, x1:x2] = blended
-			else:
-				f[y1:y2, x1:x2] = p
-
-			out.write(f)
+			# Use Poisson blending for seamless face compositing
+			result = poisson_blend(p, f, c)
+			out.write(result)
 
 	out.release()
 

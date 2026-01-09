@@ -78,6 +78,8 @@ class Wav2LipHD:
         output_path: str,
         bboxes: Optional[List[Optional[List[int]]]] = None,
         enhance: Optional[bool] = None,
+        loop_mode: str = "crossfade",
+        crossfade_frames: int = 10,
     ) -> str:
         """
         Process video with Wav2Lip-HD lip-sync.
@@ -89,6 +91,12 @@ class Wav2LipHD:
             bboxes: Optional list of per-frame bounding boxes [[y1,y2,x1,x2], ...]
                     Use None for frames that need face detection
             enhance: Override config enhance setting
+            loop_mode: How to handle audio longer than video:
+                       'none' = trim to shortest
+                       'repeat' = loop with hard cut
+                       'pingpong' = forward-backward loop
+                       'crossfade' = loop with smooth blend (default)
+            crossfade_frames: Number of frames to blend at loop boundary
 
         Returns:
             Path to output video
@@ -101,6 +109,7 @@ class Wav2LipHD:
         logger.info(f"  Audio: {audio_path}")
         logger.info(f"  Output: {output_path}")
         logger.info(f"  Enhance: {enhance}")
+        logger.info(f"  Loop mode: {loop_mode}")
         if bboxes:
             non_null = sum(1 for b in bboxes if b is not None)
             logger.info(f"  Bboxes: {non_null}/{len(bboxes)} frames with tracked boxes")
@@ -116,7 +125,10 @@ class Wav2LipHD:
 
             # Run Wav2Lip inference
             wav2lip_output = os.path.join(tmpdir, "wav2lip_output.mp4")
-            self._run_wav2lip(video_path, audio_path, wav2lip_output, bbox_file)
+            self._run_wav2lip(
+                video_path, audio_path, wav2lip_output, bbox_file,
+                loop_mode=loop_mode, crossfade_frames=crossfade_frames
+            )
 
             # Run GFPGAN enhancement if enabled
             if enhance:
@@ -138,6 +150,8 @@ class Wav2LipHD:
         audio_path: str,
         output_path: str,
         bbox_file: Optional[str] = None,
+        loop_mode: str = "crossfade",
+        crossfade_frames: int = 10,
     ):
         """Run Wav2Lip inference.
 
@@ -146,6 +160,8 @@ class Wav2LipHD:
             audio_path: Input audio path
             output_path: Output video path
             bbox_file: Optional JSON file with per-frame bounding boxes
+            loop_mode: How to handle audio > video length
+            crossfade_frames: Frames to blend at loop boundary
         """
         cmd = [
             "python",
@@ -163,6 +179,10 @@ class Wav2LipHD:
         # Use per-frame bboxes if provided (our patched inference.py)
         if bbox_file:
             cmd.extend(["--bbox_file", bbox_file])
+
+        # Loop mode for handling audio longer than video
+        cmd.extend(["--loop_mode", loop_mode])
+        cmd.extend(["--crossfade_frames", str(crossfade_frames)])
 
         if self.config.nosmooth:
             cmd.append("--nosmooth")
