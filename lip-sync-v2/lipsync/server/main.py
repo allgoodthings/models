@@ -5,6 +5,25 @@ Usage:
     uvicorn lipsync.server.main:app --host 0.0.0.0 --port 8000
 """
 
+# =============================================================================
+# TORCHVISION COMPATIBILITY FIX (must be at the very top, before any imports)
+# =============================================================================
+# basicsr 1.4.2 imports from torchvision.transforms.functional_tensor, which was
+# removed in torchvision 0.18+. This fix creates a dummy module so basicsr works.
+# See: https://github.com/XPixelGroup/BasicSR/pull/677
+import sys
+import types
+
+try:
+    from torchvision.transforms.functional_tensor import rgb_to_grayscale
+except ImportError:
+    from torchvision.transforms.functional import rgb_to_grayscale
+    # Create a fake module for backward compatibility
+    _functional_tensor = types.ModuleType("torchvision.transforms.functional_tensor")
+    _functional_tensor.rgb_to_grayscale = rgb_to_grayscale
+    sys.modules["torchvision.transforms.functional_tensor"] = _functional_tensor
+# =============================================================================
+
 import logging
 import os
 import tempfile
