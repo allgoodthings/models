@@ -1,6 +1,6 @@
 ### Lip-Sync API Test Requests
 ### Base URL
-@baseUrl = https://cbn63eueqq9klg-8000.proxy.runpod.net/
+@baseUrl = https://h0j2bzv0ewfg0w-8000.proxy.runpod.net/
 
 ### Test Assets
 @refImage = https://replicate.delivery/pbxt/MNRKHnYUu5HjNqEerj2kxWRmUD3xWGaZ0gJmhqVbkra2jCbD/underwater.jpeg
@@ -39,7 +39,7 @@ Content-Type: application/json
 {
   "video_url": "{{videoUrl}}",
   "audio_url": "{{audioUrl}}",
-  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "upload_url": "https://files.biz.dev.scenema.ai/scenema-ai-dev/admin/2026-01-08/1767845143667-lip-sync-test-10?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=minioadmin%2F20260108%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260108T040543Z&X-Amz-Expires=86400&X-Amz-Signature=b72fe84962d21933e687494a90916f23f579a78a8a31b517487e7ac8a9c93c6d&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-id=PutObject",
   "characters": [
     {
       "id": "speaker",
