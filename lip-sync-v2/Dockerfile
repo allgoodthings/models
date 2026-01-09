@@ -12,7 +12,7 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 # Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies (matching v1)
+# System dependencies
 RUN apt-get update && apt-get install -y \
     python3.11 \
     python3.11-venv \
@@ -29,8 +29,14 @@ RUN apt-get update && apt-get install -y \
     wget \
     cmake \
     build-essential \
+    openssh-server \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
+
+# Configure SSH for remote access/development
+RUN mkdir -p /var/run/sshd && \
+    echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && \
+    echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
 
 # Set Python 3.11 as default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
@@ -85,10 +91,11 @@ RUN uv pip install --system --no-cache \
 # Fix basicsr/torchvision compatibility issue
 # basicsr imports from torchvision.transforms.functional_tensor which was removed in torchvision 0.18+
 # This patches the import at the package level so it works for all processes (including subprocesses)
-RUN BASICSR_PATH=$(python3 -c "import basicsr; print(basicsr.__path__[0])") && \
+# Note: Can't use "import basicsr" to get path because the import itself fails - use pip show instead
+RUN BASICSR_PATH=$(pip show basicsr | grep Location | cut -d' ' -f2)/basicsr && \
     sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' \
     "$BASICSR_PATH/data/degradations.py" && \
-    echo "Patched basicsr for torchvision compatibility"
+    echo "Patched basicsr at $BASICSR_PATH for torchvision compatibility"
 
 # Install server dependencies
 RUN uv pip install --system --no-cache \
