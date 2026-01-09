@@ -69,13 +69,16 @@ class RIFEInterpolator:
         logger.info("Loading RIFE model...")
         start = time.time()
 
-        # Add RIFE to path for imports
+        # Add RIFE paths for imports - train_log first for v3.6 model files
+        train_log_path = str(RIFE_MODEL_PATH)
         rife_path = str(RIFE_DIR)
-        if rife_path not in sys.path:
-            sys.path.insert(0, rife_path)
+        for path in [train_log_path, rife_path]:
+            if path not in sys.path:
+                sys.path.insert(0, path)
 
         try:
-            from model.RIFE import Model
+            # Use v3.6 model from train_log (matches flownet.pkl weights)
+            from RIFE_HDv3 import Model
 
             self.model = Model()
             self.model.load_model(str(self.model_path), -1)
@@ -83,7 +86,7 @@ class RIFEInterpolator:
             self.model.device()
 
             self._loaded = True
-            logger.info(f"RIFE loaded in {time.time() - start:.2f}s on {self.device}")
+            logger.info(f"RIFE v3.6 loaded in {time.time() - start:.2f}s on {self.device}")
 
         except Exception as e:
             logger.error(f"Failed to load RIFE: {e}")
@@ -96,7 +99,7 @@ class RIFEInterpolator:
         num_frames: int = 10,
     ) -> List[np.ndarray]:
         """
-        Interpolate frames between two images.
+        Interpolate frames between two images using recursive binary subdivision.
 
         Args:
             frame_a: Start frame (BGR numpy array)
@@ -109,49 +112,63 @@ class RIFEInterpolator:
         if not self._loaded:
             self.load()
 
-        # Convert BGR to RGB and normalize
-        img0 = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
-        img1 = cv2.cvtColor(frame_b, cv2.COLOR_BGR2RGB)
+        h, w = frame_a.shape[:2]
 
-        # Ensure dimensions are divisible by 32
-        h, w = img0.shape[:2]
-        ph = ((h - 1) // 32 + 1) * 32
-        pw = ((w - 1) // 32 + 1) * 32
+        def to_tensor(frame):
+            """Convert BGR numpy to normalized tensor."""
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            t = torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
+            t = t.unsqueeze(0).to(self.device)
+            # Pad to multiple of 32
+            ph = ((h - 1) // 32 + 1) * 32
+            pw = ((w - 1) // 32 + 1) * 32
+            if ph != h or pw != w:
+                t = torch.nn.functional.pad(t, (0, pw - w, 0, ph - h))
+            return t
 
-        padding = (0, pw - w, 0, ph - h)
+        def from_tensor(t):
+            """Convert tensor back to BGR numpy."""
+            t = t[0].cpu().numpy().transpose(1, 2, 0)
+            t = (t * 255).clip(0, 255).astype(np.uint8)
+            t = t[:h, :w]
+            return cv2.cvtColor(t, cv2.COLOR_RGB2BGR)
 
-        # Convert to tensors
-        img0_t = torch.from_numpy(img0.transpose(2, 0, 1)).float() / 255.0
-        img1_t = torch.from_numpy(img1.transpose(2, 0, 1)).float() / 255.0
+        def get_midpoint(img0_t, img1_t):
+            """Get midpoint frame using RIFE inference."""
+            with torch.no_grad():
+                return self.model.inference(img0_t, img1_t, scale=1.0)
 
-        img0_t = img0_t.unsqueeze(0).to(self.device)
-        img1_t = img1_t.unsqueeze(0).to(self.device)
+        # Convert endpoints to tensors
+        img0_t = to_tensor(frame_a)
+        img1_t = to_tensor(frame_b)
 
-        # Pad if needed
-        if padding != (0, 0, 0, 0):
-            img0_t = torch.nn.functional.pad(img0_t, padding)
-            img1_t = torch.nn.functional.pad(img1_t, padding)
+        # Use binary subdivision to generate frames
+        # For num_frames intermediate frames, we need log2(num_frames+1) levels
+        # But for simplicity, just recursively subdivide until we have enough
 
-        interpolated = []
+        # Start with just the midpoint
+        frames_dict = {}  # position (0-1) -> tensor
 
-        with torch.no_grad():
-            for i in range(1, num_frames + 1):
-                # Calculate timestep (0 to 1)
-                t = i / (num_frames + 1)
+        def subdivide(left_pos, right_pos, left_t, right_t, depth):
+            """Recursively subdivide to generate frames."""
+            if len(frames_dict) >= num_frames:
+                return
+            mid_pos = (left_pos + right_pos) / 2
+            mid_t = get_midpoint(left_t, right_t)
+            frames_dict[mid_pos] = mid_t
 
-                # RIFE inference
-                mid = self.model.inference(img0_t, img1_t, timestep=t)
+            if depth > 0 and len(frames_dict) < num_frames:
+                subdivide(left_pos, mid_pos, left_t, mid_t, depth - 1)
+                subdivide(mid_pos, right_pos, mid_t, right_t, depth - 1)
 
-                # Convert back to numpy
-                mid = mid[0].cpu().numpy().transpose(1, 2, 0)
-                mid = (mid * 255).clip(0, 255).astype(np.uint8)
+        # Calculate depth needed
+        import math
+        depth = max(1, int(math.ceil(math.log2(num_frames + 1))))
+        subdivide(0.0, 1.0, img0_t, img1_t, depth)
 
-                # Remove padding
-                mid = mid[:h, :w]
-
-                # Convert RGB back to BGR
-                mid = cv2.cvtColor(mid, cv2.COLOR_RGB2BGR)
-                interpolated.append(mid)
+        # Sort by position and convert to numpy
+        sorted_frames = sorted(frames_dict.items(), key=lambda x: x[0])
+        interpolated = [from_tensor(t) for _, t in sorted_frames[:num_frames]]
 
         return interpolated
 

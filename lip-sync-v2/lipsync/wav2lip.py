@@ -144,6 +144,41 @@ class Wav2LipHD:
 
         return output_path
 
+    def _resample_bboxes(
+        self,
+        bboxes: List[Optional[List[int]]],
+        target_count: int,
+    ) -> List[Optional[List[int]]]:
+        """
+        Resample bboxes to match target frame count using nearest neighbor.
+
+        This handles the case where original video (tracking) has different
+        frame count than wav2lip output (trimmed to audio duration).
+
+        Args:
+            bboxes: Original bounding boxes
+            target_count: Target number of frames
+
+        Returns:
+            Resampled bounding boxes
+        """
+        if not bboxes or target_count <= 0:
+            return [None] * target_count
+
+        source_count = len(bboxes)
+        result = []
+
+        for i in range(target_count):
+            # Map output frame to input frame using nearest neighbor
+            source_idx = int(i * source_count / target_count)
+            source_idx = min(source_idx, source_count - 1)
+            result.append(bboxes[source_idx])
+
+        valid_count = sum(1 for b in result if b is not None)
+        logger.debug(f"  Resampled: {valid_count}/{target_count} frames with bboxes")
+
+        return result
+
     def _run_wav2lip(
         self,
         video_path: str,
@@ -250,10 +285,14 @@ class Wav2LipHD:
 
         logger.info(f"  Read {len(frames)} frames at {width}x{height} @ {fps:.1f}fps")
 
-        # Prepare bboxes - if not provided or wrong length, use None (full frame)
-        if bboxes is None or len(bboxes) != len(frames):
+        # Prepare bboxes - resample if different length
+        if bboxes is None:
             logger.info("  No bboxes provided, enhancing full frames")
             frame_bboxes = [None] * len(frames)
+        elif len(bboxes) != len(frames):
+            # Resample bboxes to match frame count using nearest neighbor
+            logger.info(f"  Resampling bboxes: {len(bboxes)} -> {len(frames)} frames")
+            frame_bboxes = self._resample_bboxes(bboxes, len(frames))
         else:
             frame_bboxes = bboxes
 

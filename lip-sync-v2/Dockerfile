@@ -153,11 +153,14 @@ app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
 app.prepare(ctx_id=-1); \
 print('InsightFace model downloaded successfully')"
 
-# Download RIFE model weights (~12MB) from HuggingFace mirror
+# Download RIFE model weights (~11MB) from official ECCV2022-RIFE HuggingFace mirror
+# Note: Must match ECCV2022-RIFE architecture, NOT Practical-RIFE v4.x weights
 RUN mkdir -p /app/vendors/rife/train_log && \
-    wget -q "https://huggingface.co/LeonJoe13/Sonic/resolve/main/RIFE/flownet.pkl" \
-    -O /app/vendors/rife/train_log/flownet.pkl && \
-    echo "RIFE model downloaded successfully"
+    wget -q "https://huggingface.co/aka7774/ECCV2022-RIFE/resolve/main/RIFE_trained_model_v3.6.zip" \
+    -O /tmp/rife_model.zip && \
+    unzip -q /tmp/rife_model.zip -d /app/vendors/rife/train_log/ && \
+    rm /tmp/rife_model.zip && \
+    echo "RIFE v3.6 model downloaded successfully"
 
 # Set environment - PYTHONPATH must include Wav2Lip and RIFE for imports
 ENV PYTHONPATH=/app:/app/vendors/wav2lip-hd/Wav2Lip-master:/app/vendors/rife

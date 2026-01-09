@@ -500,6 +500,7 @@ async def lipsync(request: LipSyncRequest):
         timing["lipsync_ms"] = int((time.time() - lipsync_start) * 1000)
 
         # Apply smart loop if requested
+        import subprocess  # Needed for ffmpeg calls
         if request.loop_mode == "smart" and processed_characters:
             logger.info("  Applying smart loop with RIFE...")
             loop_start = time.time()
@@ -530,7 +531,22 @@ async def lipsync(request: LipSyncRequest):
                 )
                 loop_handler.unload()
 
-                current_video = loop_output
+                # Re-mux audio into looped video (loop handler strips audio)
+                logger.info("    Re-adding audio to looped video...")
+                loop_with_audio = os.path.join(tmpdir, "looped_with_audio.mp4")
+                mux_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", loop_output,           # Video (no audio)
+                    "-i", audio_path,            # Original audio
+                    "-map", "0:v", "-map", "1:a",
+                    "-c:v", "copy",              # Copy video stream
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-shortest",                 # Trim to shortest stream
+                    loop_with_audio
+                ]
+                subprocess.run(mux_cmd, capture_output=True, check=True)
+
+                current_video = loop_with_audio
                 logger.info(f"    Smart loop completed in {time.time() - loop_start:.2f}s")
 
             except Exception as e:
@@ -545,7 +561,6 @@ async def lipsync(request: LipSyncRequest):
 
         # Prepare final output
         import shutil
-        import subprocess
 
         if request.include_audio:
             # Keep audio in output
