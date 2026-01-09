@@ -133,7 +133,7 @@ class Wav2LipHD:
             # Run GFPGAN enhancement if enabled
             if enhance:
                 logger.info("Running GFPGAN enhancement...")
-                self._run_gfpgan(wav2lip_output, output_path)
+                self._run_gfpgan(wav2lip_output, output_path, bboxes)
             else:
                 # Copy output directly
                 import shutil
@@ -208,91 +208,91 @@ class Wav2LipHD:
         if not os.path.exists(output_path):
             raise RuntimeError(f"Wav2Lip did not produce output: {output_path}")
 
-    def _run_gfpgan(self, input_path: str, output_path: str):
-        """Run GFPGAN face enhancement on video."""
-        # GFPGAN processes images, so we need to:
-        # 1. Extract frames
-        # 2. Enhance each frame
-        # 3. Reassemble video
+    def _run_gfpgan(
+        self,
+        input_path: str,
+        output_path: str,
+        bboxes: Optional[List[Optional[List[int]]]] = None,
+    ):
+        """
+        Run optimized GFPGAN face enhancement on video.
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            frames_dir = os.path.join(tmpdir, "frames")
-            enhanced_dir = os.path.join(tmpdir, "enhanced")
-            os.makedirs(frames_dir)
-            os.makedirs(enhanced_dir)
+        Uses face-region-only processing with Poisson blending for speed.
 
-            # Extract frames
-            logger.debug("Extracting frames for enhancement...")
-            extract_cmd = [
-                "ffmpeg", "-y", "-i", input_path,
-                "-qscale:v", "2",
-                f"{frames_dir}/frame_%06d.png"
-            ]
-            subprocess.run(extract_cmd, capture_output=True, check=True)
+        Args:
+            input_path: Input video path
+            output_path: Output video path
+            bboxes: Per-frame face bounding boxes for targeted enhancement
+        """
+        import cv2
+        from .enhancer import FaceEnhancer
 
-            # Get video FPS
-            probe_cmd = [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=r_frame_rate",
-                "-of", "csv=p=0",
-                input_path
-            ]
-            fps_result = subprocess.run(probe_cmd, capture_output=True, text=True)
-            fps_str = fps_result.stdout.strip()
-            if "/" in fps_str:
-                num, den = fps_str.split("/")
-                fps = float(num) / float(den)
-            else:
-                fps = float(fps_str) if fps_str else 25.0
+        # Read video frames
+        logger.info("  Reading video frames...")
+        cap = cv2.VideoCapture(input_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            # Run GFPGAN on frames
-            logger.debug("Enhancing frames with GFPGAN...")
-            gfpgan_cmd = [
-                "python",
-                str(GFPGAN_DIR / "inference_gfpgan.py"),
-                "-i", frames_dir,
-                "-o", enhanced_dir,
-                "-v", "1.4",
-                "-s", "1",  # No upscaling
-                "--bg_upsampler", "none",
-            ]
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(frame)
+        cap.release()
 
-            env = os.environ.copy()
-            env["PYTHONPATH"] = f"{GFPGAN_DIR}:{env.get('PYTHONPATH', '')}"
+        if not frames:
+            logger.warning("No frames read from video")
+            import shutil
+            shutil.copy(input_path, output_path)
+            return
 
-            result = subprocess.run(
-                gfpgan_cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(GFPGAN_DIR),
-                env=env,
+        logger.info(f"  Read {len(frames)} frames at {width}x{height} @ {fps:.1f}fps")
+
+        # Prepare bboxes - if not provided or wrong length, use None (full frame)
+        if bboxes is None or len(bboxes) != len(frames):
+            logger.info("  No bboxes provided, enhancing full frames")
+            frame_bboxes = [None] * len(frames)
+        else:
+            frame_bboxes = bboxes
+
+        # Run optimized face enhancement
+        enhancer = FaceEnhancer(model_path=self.config.gfpgan_checkpoint)
+        try:
+            enhanced_frames = enhancer.enhance_frames_batch(
+                frames, frame_bboxes, batch_size=8
             )
+        finally:
+            enhancer.unload()
 
-            if result.returncode != 0:
-                logger.warning(f"GFPGAN failed, using original: {result.stderr}")
-                import shutil
-                shutil.copy(input_path, output_path)
-                return
+        # Write enhanced video
+        logger.info("  Writing enhanced video...")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path + ".tmp.mp4", fourcc, fps, (width, height))
 
-            # Reassemble video with audio
-            logger.debug("Reassembling enhanced video...")
-            restored_dir = os.path.join(enhanced_dir, "restored_imgs")
-            if not os.path.exists(restored_dir):
-                restored_dir = enhanced_dir
+        for frame in enhanced_frames:
+            out.write(frame)
+        out.release()
 
-            reassemble_cmd = [
-                "ffmpeg", "-y",
-                "-framerate", str(fps),
-                "-i", f"{restored_dir}/frame_%06d.png",
-                "-i", input_path,
-                "-map", "0:v", "-map", "1:a?",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k",
-                "-pix_fmt", "yuv420p",
-                output_path
-            ]
-            subprocess.run(reassemble_cmd, capture_output=True, check=True)
+        # Re-encode with ffmpeg to add audio and proper codec
+        logger.info("  Re-encoding with audio...")
+        encode_cmd = [
+            "ffmpeg", "-y",
+            "-i", output_path + ".tmp.mp4",
+            "-i", input_path,
+            "-map", "0:v", "-map", "1:a?",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-pix_fmt", "yuv420p",
+            "-shortest",
+            output_path
+        ]
+        subprocess.run(encode_cmd, capture_output=True, check=True)
+
+        # Clean up temp file
+        if os.path.exists(output_path + ".tmp.mp4"):
+            os.remove(output_path + ".tmp.mp4")
 
 
 def download_models(model_dir: str = "/models"):

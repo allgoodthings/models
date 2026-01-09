@@ -384,6 +384,11 @@ class LoopHandler:
         cap = cv2.VideoCapture(video_path)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        video_fps = cap.get(cv2.CAP_PROP_FPS)
+
+        # Use video's actual fps if available, otherwise use provided fps
+        if video_fps > 0:
+            fps = video_fps
 
         frames = []
         while True:
@@ -396,7 +401,25 @@ class LoopHandler:
         if not frames:
             raise ValueError("No frames read from video")
 
-        logger.info(f"  Read {len(frames)} frames at {width}x{height}")
+        logger.info(f"  Read {len(frames)} frames at {width}x{height} @ {fps:.1f}fps")
+
+        # Validate and adjust bboxes to match frame count
+        # This handles cases where original tracking has different frame count than processed video
+        if len(bboxes) != len(frames):
+            logger.warning(f"  Bbox count ({len(bboxes)}) != frame count ({len(frames)}), adjusting...")
+            if len(bboxes) > len(frames):
+                # Truncate bboxes to match frames
+                bboxes = bboxes[:len(frames)]
+            else:
+                # Extend bboxes with None for extra frames
+                bboxes = bboxes + [None] * (len(frames) - len(bboxes))
+
+        # Also adjust landmarks if provided
+        if landmarks is not None and len(landmarks) != len(frames):
+            if len(landmarks) > len(frames):
+                landmarks = landmarks[:len(frames)]
+            else:
+                landmarks = landmarks + [None] * (len(frames) - len(landmarks))
 
         # Find best loop point
         best_frame, similarity = self.detector.find_best_loop_point(
@@ -449,23 +472,40 @@ class LoopHandler:
         Returns:
             List of frames forming a seamless loop
         """
+        # Ensure loop_point is within bounds
+        if loop_point < 0:
+            loop_point = 0
+        if loop_point >= len(frames):
+            loop_point = len(frames) - 1
+
         # Trim to loop point
         loop_frames = frames[:loop_point + 1]
+
+        if len(loop_frames) < 2:
+            logger.warning(f"  Too few frames for RIFE loop ({len(loop_frames)}), returning all frames")
+            return frames
 
         # Interpolate from last frame back to first frame
         last_frame = loop_frames[-1]
         first_frame = loop_frames[0]
 
-        logger.info(f"  Interpolating {self.config.transition_frames} transition frames...")
-        transition = self.interpolator.interpolate(
-            last_frame,
-            first_frame,
-            num_frames=self.config.transition_frames,
-        )
+        logger.info(f"  Creating RIFE loop: {len(loop_frames)} frames + {self.config.transition_frames} transition frames")
+
+        try:
+            transition = self.interpolator.interpolate(
+                last_frame,
+                first_frame,
+                num_frames=self.config.transition_frames,
+            )
+            logger.info(f"  RIFE generated {len(transition)} transition frames")
+        except Exception as e:
+            logger.warning(f"  RIFE interpolation failed: {e}, using crossfade fallback")
+            return self._create_crossfade_loop(frames)
 
         # Combine: original frames + transition (excluding endpoints)
         result = loop_frames + transition
 
+        logger.info(f"  Total loop frames: {len(result)}")
         return result
 
     def _create_crossfade_loop(
@@ -520,12 +560,20 @@ class LoopHandler:
         Returns:
             Extended frame list
         """
-        if len(loop_frames) >= target_frames:
-            return loop_frames[:target_frames]
-
-        result = []
         loop_len = len(loop_frames)
 
+        if loop_len == 0:
+            logger.error("  No loop frames to extend!")
+            return []
+
+        if loop_len >= target_frames:
+            logger.info(f"  Loop already meets target ({loop_len} >= {target_frames}), trimming")
+            return loop_frames[:target_frames]
+
+        num_loops = (target_frames + loop_len - 1) // loop_len
+        logger.info(f"  Extending {loop_len} frames to {target_frames} frames ({num_loops} loops)")
+
+        result = []
         for i in range(target_frames):
             result.append(loop_frames[i % loop_len])
 
