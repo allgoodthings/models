@@ -82,6 +82,14 @@ RUN uv pip install --system --no-cache \
     gfpgan>=1.3.8 \
     realesrgan>=0.3.0
 
+# Fix basicsr/torchvision compatibility issue
+# basicsr imports from torchvision.transforms.functional_tensor which was removed in torchvision 0.18+
+# This patches the import at the package level so it works for all processes (including subprocesses)
+RUN BASICSR_PATH=$(python3 -c "import basicsr; print(basicsr.__path__[0])") && \
+    sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' \
+    "$BASICSR_PATH/data/degradations.py" && \
+    echo "Patched basicsr for torchvision compatibility"
+
 # Install server dependencies
 RUN uv pip install --system --no-cache \
     fastapi>=0.104.0 \
@@ -93,6 +101,9 @@ RUN uv pip install --system --no-cache \
     ffmpeg-python>=0.2.0 \
     huggingface-hub>=0.19.0 \
     requests>=2.31.0
+
+# Clone RIFE for frame interpolation (used for smooth loop transitions)
+RUN git clone --depth 1 https://github.com/hzwer/ECCV2022-RIFE.git /app/vendors/rife
 
 # Copy source code and scripts
 COPY lipsync/ ./lipsync/
@@ -138,8 +149,14 @@ app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
 app.prepare(ctx_id=-1); \
 print('InsightFace model downloaded successfully')"
 
-# Set environment - PYTHONPATH must include Wav2Lip for imports
-ENV PYTHONPATH=/app:/app/vendors/wav2lip-hd/Wav2Lip-master
+# Download RIFE model weights (~120MB)
+RUN mkdir -p /app/vendors/rife/train_log && \
+    wget -q "https://github.com/hzwer/Practical-RIFE/releases/download/v4.6/flownet-v46.pkl" \
+    -O /app/vendors/rife/train_log/flownet.pkl && \
+    echo "RIFE model downloaded successfully"
+
+# Set environment - PYTHONPATH must include Wav2Lip and RIFE for imports
+ENV PYTHONPATH=/app:/app/vendors/wav2lip-hd/Wav2Lip-master:/app/vendors/rife
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_VISIBLE_DEVICES=0
 

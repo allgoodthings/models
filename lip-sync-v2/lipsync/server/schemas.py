@@ -50,14 +50,15 @@ class LipSyncRequest(BaseModel):
     enhance_quality: bool = Field(
         True, description="Apply GFPGAN enhancement after lip-sync"
     )
-    loop_mode: Literal["none", "repeat", "pingpong", "crossfade"] = Field(
-        "crossfade",
+    loop_mode: Literal["none", "repeat", "pingpong", "crossfade", "smart"] = Field(
+        "smart",
         description=(
             "How to handle audio longer than video: "
             "'none' = trim to shortest, "
             "'repeat' = loop video with hard cut, "
             "'pingpong' = forward-backward loop (good for portraits), "
-            "'crossfade' = loop with smooth blend at boundaries (default)"
+            "'crossfade' = loop with smooth blend at boundaries, "
+            "'smart' = find best loop point + RIFE interpolation (default, best quality)"
         ),
     )
     crossfade_frames: int = Field(

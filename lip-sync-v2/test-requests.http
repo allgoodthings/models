@@ -2,8 +2,8 @@
 ### Uses Wav2Lip + GFPGAN (simpler than v1's MuseTalk/LivePortrait stack)
 
 ### Base URL - Update to your deployment
-@baseUrl = https://h0j2bzv0ewfg0w-8000.proxy.runpod.net
-
+#@baseUrl = https://h0j2bzv0ewfg0w-8000.proxy.runpod.net
+@baseUrl = 173.206.149.108:40223
 ### Test Assets
 @refImage = https://replicate.delivery/pbxt/MNRKHnYUu5HjNqEerj2kxWRmUD3xWGaZ0gJmhqVbkra2jCbD/underwater.jpeg
 @videoUrl = https://replicate.delivery/czjl/xFIwsxPXTtpCHJw2WqLH3gqACg3csLVVdKtbLf1heBzXiUJUA/tmp35xuh600.mp4
@@ -43,7 +43,33 @@ Content-Type: application/json
 }
 
 ### =============================================================================
-### Lip-Sync (Full Pipeline) - Crossfade Loop (Default)
+### Lip-Sync (Full Pipeline) - Smart Loop (Default, Best Quality)
+### Finds best loop point + RIFE interpolation for seamless transitions
+### =============================================================================
+# @timeout 300000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": true,
+  "loop_mode": "smart",
+  "crossfade_frames": 10,
+  "temporal_smoothing": 0.3
+}
+
+### =============================================================================
+### Lip-Sync - Crossfade Loop (Simpler fallback)
 ### Wav2Lip + GFPGAN + Poisson blending + crossfade at loop boundaries
 ### =============================================================================
 # @timeout 300000
@@ -154,7 +180,7 @@ Content-Type: application/json
 {
   "video_url": "{{videoUrl}}",
   "audio_url": "{{audioUrl}}",
-  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "upload_url": "https://files.biz.dev.scenema.ai/scenema-ai-dev/admin/2026-01-09/1767930621542-lip-sync-v2-2?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=minioadmin%2F20260109%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260109T035021Z&X-Amz-Expires=86400&X-Amz-Signature=a0628507266ac36e9def254e85bba7bb376c15ece1e99fc3945ea058f1d98ef9&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-id=PutObject",
   "characters": [
     {
       "id": "speaker",
@@ -163,7 +189,7 @@ Content-Type: application/json
     }
   ],
   "similarity_threshold": 0.5,
-  "enhance_quality": false,
+  "enhance_quality": true,
   "loop_mode": "crossfade",
   "temporal_smoothing": 0.3
 }

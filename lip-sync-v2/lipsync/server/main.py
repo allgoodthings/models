@@ -48,6 +48,7 @@ from .schemas import (
 )
 from ..tracker import FaceTracker, generate_tracking_video, bbox_to_hex_color
 from ..wav2lip import Wav2LipHD, Wav2LipConfig
+from ..loop_handler import LoopHandler, LoopConfig
 
 # Configure logging
 log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -191,6 +192,33 @@ def get_video_info(video_path: str) -> dict:
         "fps": fps,
         "frame_count": frame_count,
     }
+
+
+def get_audio_duration(audio_path: str) -> float:
+    """Get audio duration in seconds using ffprobe."""
+    import subprocess
+
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "csv=p=0",
+        audio_path
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except Exception as e:
+        logger.warning(f"Failed to get audio duration: {e}")
+        # Fallback: try to read with cv2 (works for some formats)
+        cap = cv2.VideoCapture(audio_path)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            cap.release()
+            if fps > 0:
+                return frame_count / fps
+        return 10.0  # Default fallback
 
 
 @asynccontextmanager
@@ -434,6 +462,9 @@ async def lipsync(request: LipSyncRequest):
         processed_characters: List[str] = []
         current_video = video_path
 
+        # For "smart" loop mode, we don't loop in wav2lip - we do it after
+        wav2lip_loop_mode = "none" if request.loop_mode == "smart" else request.loop_mode
+
         for char in request.characters:
             char_bboxes = tracking_result.tracks.get(char.id, [])
             has_detections = any(b is not None for b in char_bboxes)
@@ -454,7 +485,7 @@ async def lipsync(request: LipSyncRequest):
                     output_path=char_output,
                     bboxes=char_bboxes,
                     enhance=request.enhance_quality,
-                    loop_mode=request.loop_mode,
+                    loop_mode=wav2lip_loop_mode,
                     crossfade_frames=request.crossfade_frames,
                 )
 
@@ -467,6 +498,44 @@ async def lipsync(request: LipSyncRequest):
                 continue
 
         timing["lipsync_ms"] = int((time.time() - lipsync_start) * 1000)
+
+        # Apply smart loop if requested
+        if request.loop_mode == "smart" and processed_characters:
+            logger.info("  Applying smart loop with RIFE...")
+            loop_start = time.time()
+
+            try:
+                # Get audio duration
+                audio_duration = get_audio_duration(audio_path)
+                logger.info(f"    Audio duration: {audio_duration:.2f}s")
+
+                # Get the bboxes from the first processed character for loop detection
+                first_char_bboxes = tracking_result.tracks.get(processed_characters[0], [])
+
+                # Create seamless loop
+                loop_config = LoopConfig(
+                    min_loop_frames=30,  # 1s minimum at 30fps
+                    transition_frames=request.crossfade_frames,
+                    similarity_threshold=0.7,
+                )
+                loop_handler = LoopHandler(loop_config)
+
+                loop_output = os.path.join(tmpdir, "looped_output.mp4")
+                loop_handler.create_seamless_loop(
+                    video_path=current_video,
+                    output_path=loop_output,
+                    target_duration=audio_duration,
+                    bboxes=first_char_bboxes,
+                    fps=tracking_result.fps,
+                )
+                loop_handler.unload()
+
+                current_video = loop_output
+                logger.info(f"    Smart loop completed in {time.time() - loop_start:.2f}s")
+
+            except Exception as e:
+                logger.warning(f"    Smart loop failed, using original: {e}")
+                # Fall back to original output without looping
 
         if not processed_characters:
             return LipSyncResponse(
