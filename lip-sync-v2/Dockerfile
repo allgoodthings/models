@@ -89,7 +89,7 @@ RUN uv pip install --system --no-cache \
 # basicsr imports from torchvision.transforms.functional_tensor which was removed in torchvision 0.18+
 # This patches the import at the package level so it works for all processes (including subprocesses)
 # Note: Can't use "import basicsr" to get path because the import itself fails - use pip show instead
-RUN BASICSR_PATH=$(pip show basicsr | grep Location | cut -d' ' -f2)/basicsr && \
+RUN BASICSR_PATH=$(uv pip show basicsr | grep Location | cut -d' ' -f2)/basicsr && \
     sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' \
     "$BASICSR_PATH/data/degradations.py" && \
     echo "Patched basicsr at $BASICSR_PATH for torchvision compatibility"
