@@ -37,7 +37,10 @@ class Wav2LipConfig:
 
     def __post_init__(self):
         if self.pads is None:
-            self.pads = [0, 10, 0, 0]
+            # Padding: [top, bottom, left, right]
+            # Increased bottom padding to capture more chin area
+            # and reduce visible edge artifacts
+            self.pads = [0, 20, 0, 0]
 
 
 class Wav2LipHD:

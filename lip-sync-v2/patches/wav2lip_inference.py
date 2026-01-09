@@ -294,12 +294,40 @@ def main():
 			pred = model(mel_batch, img_batch)
 
 		pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
-		
+
 		for p, f, c in zip(pred, frames, coords):
 			y1, y2, x1, x2 = c
 			p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
 
-			f[y1:y2, x1:x2] = p
+			# Feathered blending to avoid hard rectangular edges
+			# Create a soft mask that fades at the edges
+			h, w = p.shape[:2]
+			mask = np.ones((h, w), dtype=np.float32)
+
+			# Feather size (pixels from edge to start fading)
+			feather = min(15, h // 6, w // 6)
+
+			if feather > 1:
+				# Create gradient at edges
+				for i in range(feather):
+					alpha = i / feather
+					# Top edge
+					mask[i, :] = min(mask[i, 0], alpha)
+					# Bottom edge
+					mask[h - 1 - i, :] = min(mask[h - 1 - i, 0], alpha)
+					# Left edge
+					mask[:, i] = np.minimum(mask[:, i], alpha)
+					# Right edge
+					mask[:, w - 1 - i] = np.minimum(mask[:, w - 1 - i], alpha)
+
+				# Apply feathered blend
+				mask = mask[:, :, np.newaxis]  # Add channel dimension
+				original = f[y1:y2, x1:x2].astype(np.float32)
+				blended = (p.astype(np.float32) * mask + original * (1 - mask)).astype(np.uint8)
+				f[y1:y2, x1:x2] = blended
+			else:
+				f[y1:y2, x1:x2] = p
+
 			out.write(f)
 
 	out.release()
