@@ -153,9 +153,9 @@ app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
 app.prepare(ctx_id=-1); \
 print('InsightFace model downloaded successfully')"
 
-# Download RIFE model weights (~120MB)
+# Download RIFE model weights (~12MB) from HuggingFace mirror
 RUN mkdir -p /app/vendors/rife/train_log && \
-    wget -q "https://github.com/hzwer/Practical-RIFE/releases/download/v4.6/flownet-v46.pkl" \
+    wget -q "https://huggingface.co/LeonJoe13/Sonic/resolve/main/RIFE/flownet.pkl" \
     -O /app/vendors/rife/train_log/flownet.pkl && \
     echo "RIFE model downloaded successfully"
 
