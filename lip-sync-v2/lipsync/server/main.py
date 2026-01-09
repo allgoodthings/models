@@ -50,6 +50,7 @@ from .schemas import (
 )
 from ..tracker import FaceTracker, generate_tracking_video, bbox_to_hex_color
 from ..wav2lip import Wav2LipHD, Wav2LipConfig
+from ..wav2lip_model import Wav2LipModel
 from ..loop_handler import LoopHandler, LoopConfig
 
 # Configure logging
@@ -64,6 +65,7 @@ logger = logging.getLogger("lipsync.server")
 # Global instances
 face_detector: Optional[InsightFaceDetector] = None
 wav2lip: Optional[Wav2LipHD] = None
+wav2lip_model: Optional[Wav2LipModel] = None  # In-process model for GPU efficiency
 
 # Default models directory
 MODELS_DIR = os.environ.get("MODELS_DIR", "/app/models")
@@ -224,7 +226,7 @@ def get_audio_duration(audio_path: str) -> float:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load models on startup, cleanup on shutdown."""
-    global face_detector, wav2lip
+    global face_detector, wav2lip, wav2lip_model
 
     logger.info("=" * 60)
     logger.info("STARTING LIP-SYNC V2 SERVER")
@@ -246,23 +248,32 @@ async def lifespan(app: FastAPI):
         return
 
     logger.info("-" * 40)
-    logger.info("[0/2] Ensuring models are downloaded...")
+    logger.info("[0/3] Ensuring models are downloaded...")
     await ensure_models_downloaded()
 
     logger.info("-" * 40)
-    logger.info("[1/2] Loading InsightFace...")
+    logger.info("[1/3] Loading InsightFace...")
     face_detector = InsightFaceDetector(model_name="buffalo_l", device=device)
     face_detector.load()
-    logger.info("[1/2] InsightFace loaded successfully")
+    logger.info("[1/3] InsightFace loaded successfully")
 
     logger.info("-" * 40)
-    logger.info("[2/2] Initializing Wav2Lip-HD...")
+    logger.info("[2/3] Loading Wav2Lip model (in-process)...")
+    wav2lip_model = Wav2LipModel(
+        checkpoint_path=os.path.join(MODELS_DIR, "wav2lip_gan.pth"),
+        device=device,
+    )
+    wav2lip_model.load()
+    logger.info("[2/3] Wav2Lip model loaded on GPU")
+
+    logger.info("-" * 40)
+    logger.info("[3/3] Initializing Wav2Lip-HD (subprocess fallback)...")
     wav2lip_config = Wav2LipConfig(
         checkpoint_path=os.path.join(MODELS_DIR, "wav2lip_gan.pth"),
         gfpgan_checkpoint=os.path.join(MODELS_DIR, "GFPGANv1.4.pth"),
     )
     wav2lip = Wav2LipHD(wav2lip_config)
-    logger.info("[2/2] Wav2Lip-HD initialized")
+    logger.info("[3/3] Wav2Lip-HD initialized")
 
     logger.info("-" * 40)
     logger.info("ALL MODELS LOADED - Server ready")
@@ -457,45 +468,134 @@ async def lipsync(request: LipSyncRequest):
 
         timing["tracking_ms"] = int((time.time() - tracking_start) * 1000)
 
-        # Process each character sequentially
+        # Process lip-sync using in-process model for GPU efficiency
         lipsync_start = time.time()
         processed_characters: List[str] = []
-        current_video = video_path
 
         # For "smart" loop mode, we don't loop in wav2lip - we do it after
         wav2lip_loop_mode = "none" if request.loop_mode == "smart" else request.loop_mode
 
-        for char in request.characters:
-            char_bboxes = tracking_result.tracks.get(char.id, [])
-            has_detections = any(b is not None for b in char_bboxes)
+        # Use in-process model if available
+        if wav2lip_model is not None and wav2lip_model.is_loaded:
+            logger.info("  Using in-process Wav2Lip model (GPU optimized)")
 
-            if not has_detections:
-                logger.warning(f"  No detections for {char.id}, skipping")
-                continue
+            # Load video frames
+            cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            logger.info(f"  Processing {char.id}...")
+            frames = []
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames.append(frame)
+            cap.release()
 
-            # Output for this character
-            char_output = os.path.join(tmpdir, f"{char.id}_output.mp4")
+            logger.info(f"    Loaded {len(frames)} frames at {width}x{height} @ {fps:.1f}fps")
 
-            try:
-                wav2lip.process(
-                    video_path=current_video,
-                    audio_path=audio_path,
-                    output_path=char_output,
-                    bboxes=char_bboxes,
-                    enhance=request.enhance_quality,
+            # Process audio to mel chunks
+            mel_chunks = wav2lip_model.process_audio(audio_path, fps)
+            logger.info(f"    Generated {len(mel_chunks)} mel chunks")
+
+            # Process each character
+            for char in request.characters:
+                char_bboxes = tracking_result.tracks.get(char.id, [])
+                has_detections = any(b is not None for b in char_bboxes)
+
+                if not has_detections:
+                    logger.warning(f"  No detections for {char.id}, skipping")
+                    continue
+
+                logger.info(f"  Processing {char.id} with in-process model...")
+
+                # Convert bboxes to coordinates format
+                face_coords = []
+                for bbox in char_bboxes:
+                    if bbox is not None:
+                        # bbox is [y1, y2, x1, x2]
+                        face_coords.append(tuple(bbox))
+                    else:
+                        face_coords.append(None)
+
+                # Run in-process inference
+                output_frames = wav2lip_model.process_video(
+                    frames=frames,
+                    face_coords=face_coords,
+                    mel_chunks=mel_chunks,
                     loop_mode=wav2lip_loop_mode,
                     crossfade_frames=request.crossfade_frames,
                 )
 
-                # Use this output as input for next character
-                current_video = char_output
+                # Update frames for next character
+                frames = output_frames
                 processed_characters.append(char.id)
 
-            except Exception as e:
-                logger.error(f"  Failed to process {char.id}: {e}")
-                continue
+            # Write output video
+            char_output = os.path.join(tmpdir, "lipsync_output.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(char_output, fourcc, fps, (width, height))
+            for frame in frames[:len(mel_chunks)]:
+                out.write(frame)
+            out.release()
+
+            # Re-encode with audio
+            final_output = os.path.join(tmpdir, "final_output.mp4")
+            mux_cmd = [
+                "ffmpeg", "-y",
+                "-i", char_output,
+                "-i", audio_path,
+                "-map", "0:v", "-map", "1:a",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest",
+                final_output
+            ]
+            subprocess.run(mux_cmd, capture_output=True, check=True)
+            current_video = final_output
+
+            # Apply GFPGAN enhancement if requested
+            if request.enhance_quality and processed_characters:
+                logger.info("  Applying GFPGAN enhancement...")
+                enhanced_output = os.path.join(tmpdir, "enhanced_output.mp4")
+                # Use the existing wav2lip._run_gfpgan for enhancement
+                first_char_bboxes = tracking_result.tracks.get(processed_characters[0], [])
+                wav2lip._run_gfpgan(current_video, enhanced_output, first_char_bboxes)
+                current_video = enhanced_output
+
+        else:
+            # Fallback to subprocess-based processing
+            logger.info("  Using subprocess Wav2Lip (fallback)")
+            current_video = video_path
+
+            for char in request.characters:
+                char_bboxes = tracking_result.tracks.get(char.id, [])
+                has_detections = any(b is not None for b in char_bboxes)
+
+                if not has_detections:
+                    logger.warning(f"  No detections for {char.id}, skipping")
+                    continue
+
+                logger.info(f"  Processing {char.id}...")
+
+                char_output = os.path.join(tmpdir, f"{char.id}_output.mp4")
+
+                try:
+                    wav2lip.process(
+                        video_path=current_video,
+                        audio_path=audio_path,
+                        output_path=char_output,
+                        bboxes=char_bboxes,
+                        enhance=request.enhance_quality,
+                        loop_mode=wav2lip_loop_mode,
+                        crossfade_frames=request.crossfade_frames,
+                    )
+                    current_video = char_output
+                    processed_characters.append(char.id)
+                except Exception as e:
+                    logger.error(f"  Failed to process {char.id}: {e}")
+                    continue
 
         timing["lipsync_ms"] = int((time.time() - lipsync_start) * 1000)
 
