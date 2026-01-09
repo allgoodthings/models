@@ -8,12 +8,16 @@ handling bounding box injection, video processing, and GFPGAN enhancement.
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+
+import cv2
 
 logger = logging.getLogger("lipsync.wav2lip")
 
@@ -136,7 +140,6 @@ class Wav2LipHD:
                 self._run_gfpgan(wav2lip_output, output_path, bboxes)
             else:
                 # Copy output directly
-                import shutil
                 shutil.copy(wav2lip_output, output_path)
 
         elapsed = time.time() - start_time
@@ -259,7 +262,6 @@ class Wav2LipHD:
             output_path: Output video path
             bboxes: Per-frame face bounding boxes for targeted enhancement
         """
-        import cv2
         from .enhancer import FaceEnhancer
 
         # Read video frames
@@ -279,7 +281,6 @@ class Wav2LipHD:
 
         if not frames:
             logger.warning("No frames read from video")
-            import shutil
             shutil.copy(input_path, output_path)
             return
 
@@ -341,8 +342,6 @@ def download_models(model_dir: str = "/models"):
     Args:
         model_dir: Directory to save models
     """
-    import urllib.request
-
     os.makedirs(model_dir, exist_ok=True)
 
     models = {

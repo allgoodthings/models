@@ -26,6 +26,8 @@ except ImportError:
 
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -196,8 +198,6 @@ def get_video_info(video_path: str) -> dict:
 
 def get_audio_duration(audio_path: str) -> float:
     """Get audio duration in seconds using ffprobe."""
-    import subprocess
-
     cmd = [
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
@@ -500,7 +500,6 @@ async def lipsync(request: LipSyncRequest):
         timing["lipsync_ms"] = int((time.time() - lipsync_start) * 1000)
 
         # Apply smart loop if requested
-        import subprocess  # Needed for ffmpeg calls
         if request.loop_mode == "smart" and processed_characters:
             logger.info("  Applying smart loop with RIFE...")
             loop_start = time.time()
@@ -560,8 +559,6 @@ async def lipsync(request: LipSyncRequest):
             )
 
         # Prepare final output
-        import shutil
-
         if request.include_audio:
             # Keep audio in output
             shutil.copy(current_video, output_path)

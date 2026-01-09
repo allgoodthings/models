@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Generator, List, Tuple
 
+import cv2
 import numpy as np
 
 logger = logging.getLogger("lipsync.frame_extractor")
@@ -85,7 +86,6 @@ def get_video_info(video_path: str) -> VideoInfo:
 
     # Last resort: use cv2 to count
     if total_frames == 0:
-        import cv2
         cap = cv2.VideoCapture(video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()

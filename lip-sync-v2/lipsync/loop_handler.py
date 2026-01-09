@@ -8,6 +8,7 @@ This module provides seamless video looping by:
 """
 
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -162,7 +163,6 @@ class RIFEInterpolator:
                 subdivide(mid_pos, right_pos, mid_t, right_t, depth - 1)
 
         # Calculate depth needed
-        import math
         depth = max(1, int(math.ceil(math.log2(num_frames + 1))))
         subdivide(0.0, 1.0, img0_t, img1_t, depth)
 

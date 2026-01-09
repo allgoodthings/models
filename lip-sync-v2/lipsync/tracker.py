@@ -9,6 +9,7 @@ Provides efficient face tracking by:
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -282,8 +283,6 @@ def generate_tracking_video(
     Returns:
         Path to output video
     """
-    import time
-
     start_time = time.time()
     logger.info(f"Generating tracking visualization: {output_path}")
 
