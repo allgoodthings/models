@@ -26,8 +26,8 @@ GFPGAN_DIR = Path(__file__).parent.parent / "vendors" / "wav2lip-hd" / "GFPGAN-m
 class Wav2LipConfig:
     """Configuration for Wav2Lip-HD processing."""
 
-    checkpoint_path: str = "/models/wav2lip_gan.pth"
-    gfpgan_checkpoint: str = "/models/GFPGANv1.4.pth"
+    checkpoint_path: str = "/app/models/wav2lip_gan.pth"
+    gfpgan_checkpoint: str = "/app/models/GFPGANv1.4.pth"
     face_det_batch_size: int = 16
     wav2lip_batch_size: int = 128
     resize_factor: int = 1

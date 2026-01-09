@@ -46,6 +46,54 @@ wav2lip: Optional[Wav2LipHD] = None
 # Default models directory
 MODELS_DIR = os.environ.get("MODELS_DIR", "/app/models")
 
+# Model download URLs (HuggingFace mirrors - more reliable than SharePoint)
+MODEL_URLS = {
+    "wav2lip_gan.pth": "https://huggingface.co/numz/wav2lip_studio/resolve/main/Wav2lip/wav2lip_gan.pth",
+    "GFPGANv1.4.pth": "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth",
+}
+
+# Wav2Lip's S3FD face detection model (different path)
+S3FD_MODEL_URL = "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth"
+S3FD_MODEL_PATH = "/app/vendors/wav2lip-hd/Wav2Lip-master/face_detection/detection/sfd/s3fd.pth"
+
+
+async def ensure_models_downloaded():
+    """Download model files if they don't exist."""
+    os.makedirs(MODELS_DIR, exist_ok=True)
+
+    # Download main models (wav2lip, gfpgan)
+    for filename, url in MODEL_URLS.items():
+        model_path = os.path.join(MODELS_DIR, filename)
+
+        if os.path.exists(model_path):
+            size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            logger.info(f"  Model exists: {filename} ({size_mb:.1f}MB)")
+            continue
+
+        logger.info(f"  Downloading {filename} from {url}...")
+        try:
+            await download_file(url, model_path)
+            size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            logger.info(f"  Downloaded {filename} ({size_mb:.1f}MB)")
+        except Exception as e:
+            logger.error(f"  Failed to download {filename}: {e}")
+            raise RuntimeError(f"Failed to download required model {filename}: {e}")
+
+    # Download S3FD face detection model for Wav2Lip
+    if not os.path.exists(S3FD_MODEL_PATH):
+        logger.info(f"  Downloading S3FD face detection model...")
+        os.makedirs(os.path.dirname(S3FD_MODEL_PATH), exist_ok=True)
+        try:
+            await download_file(S3FD_MODEL_URL, S3FD_MODEL_PATH)
+            size_mb = os.path.getsize(S3FD_MODEL_PATH) / (1024 * 1024)
+            logger.info(f"  Downloaded s3fd.pth ({size_mb:.1f}MB)")
+        except Exception as e:
+            logger.error(f"  Failed to download S3FD model: {e}")
+            raise RuntimeError(f"Failed to download S3FD face detection model: {e}")
+    else:
+        size_mb = os.path.getsize(S3FD_MODEL_PATH) / (1024 * 1024)
+        logger.info(f"  Model exists: s3fd.pth ({size_mb:.1f}MB)")
+
 
 async def download_file(url: str, dest_path: str) -> float:
     """Download a file from URL. Returns download time in ms."""
@@ -149,6 +197,10 @@ async def lifespan(app: FastAPI):
         logger.info("PRELOAD_MODELS=false - Skipping model loading")
         yield
         return
+
+    logger.info("-" * 40)
+    logger.info("[0/2] Ensuring models are downloaded...")
+    await ensure_models_downloaded()
 
     logger.info("-" * 40)
     logger.info("[1/2] Loading InsightFace...")

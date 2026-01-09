@@ -105,27 +105,29 @@ RUN if [ -f requirements.txt ]; then uv pip install --system --no-cache -r requi
 # Create models directory
 RUN mkdir -p /app/models
 
-# Download model weights
-ARG SKIP_MODEL_DOWNLOAD=false
+# Model downloads
+#
+# Models are downloaded at RUNTIME on first startup (see main.py ensure_models_downloaded).
+# This allows faster CI builds with SKIP_MODEL_DOWNLOAD=true.
+#
+# Models downloaded at runtime:
+#   - wav2lip_gan.pth (~400MB) - from HuggingFace
+#   - GFPGANv1.4.pth (~350MB) - from GitHub
+#   - s3fd.pth (~85MB) - S3FD face detection for Wav2Lip
+#
+# For faster cold starts, you can pre-download during build:
+ARG SKIP_MODEL_DOWNLOAD=true
 
-# Download Wav2Lip checkpoint (~400MB)
 RUN if [ "$SKIP_MODEL_DOWNLOAD" = "false" ]; then \
-    echo "Downloading Wav2Lip checkpoint..." && \
-    wget -q "https://iiitaphyd-my.sharepoint.com/personal/radrabha_m_research_iiit_ac_in/_layouts/15/download.aspx?SourceUrl=%2Fpersonal%2Fradrabha%5Fm%5Fresearch%5Fiiit%5Fac%5Fin%2FDocuments%2FWav2Lip%5FModels%2Fwav2lip%5Fgan%2Epth" -O /app/models/wav2lip_gan.pth || \
-    echo "WARNING: Could not download Wav2Lip model from SharePoint. Please download manually."; \
-    fi
-
-# Download GFPGAN checkpoint (~350MB)
-RUN if [ "$SKIP_MODEL_DOWNLOAD" = "false" ]; then \
-    echo "Downloading GFPGAN checkpoint..." && \
-    wget -q "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth" -O /app/models/GFPGANv1.4.pth; \
-    fi
-
-# Download face detection model for Wav2Lip's S3FD
-RUN if [ "$SKIP_MODEL_DOWNLOAD" = "false" ]; then \
-    echo "Downloading S3FD face detection model..." && \
+    echo "Pre-downloading models during build..." && \
+    # Wav2Lip (from HuggingFace - more reliable than SharePoint)
+    wget -q "https://huggingface.co/numz/wav2lip_studio/resolve/main/Wav2lip/wav2lip_gan.pth" -O /app/models/wav2lip_gan.pth && \
+    # GFPGAN
+    wget -q "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth" -O /app/models/GFPGANv1.4.pth && \
+    # S3FD face detection
     mkdir -p /app/vendors/wav2lip-hd/Wav2Lip-master/face_detection/detection/sfd && \
-    wget -q "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth" -O /app/vendors/wav2lip-hd/Wav2Lip-master/face_detection/detection/sfd/s3fd.pth; \
+    wget -q "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth" -O /app/vendors/wav2lip-hd/Wav2Lip-master/face_detection/detection/sfd/s3fd.pth && \
+    echo "Models pre-downloaded successfully"; \
     fi
 
 # Pre-download InsightFace buffalo_l model (~500MB)
