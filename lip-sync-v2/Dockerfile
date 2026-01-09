@@ -5,15 +5,17 @@
 #   docker build -t lip-sync-v2:latest .
 #
 # Run:
-#   docker run --gpus all -p 8000:8000 -p 8080:8080 -p 22:22 lip-sync-v2:latest
+#   docker run --gpus all -p 8000:8000 lip-sync-v2:latest
 #
-# Base image includes: SSH, Jupyter (8080), uv, build tools
-# Works on: Vast.ai (with portal), RunPod, Lambda, any GPU cloud
+# For Vast.ai: Select "Jupyter + SSH" launch mode - SSH is injected automatically
+# On-start script: uvicorn lipsync.server.main:app --host 0.0.0.0 --port 8000 &
 
-FROM vastai/base-image:cuda-12.4.1-auto
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
-# Install Python 3.11 and additional system dependencies
-# Base image has: build-essential, cmake, git, curl, wget, SSH, Jupyter
+# Prevent interactive prompts during apt install
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System dependencies
 RUN apt-get update && apt-get install -y \
     python3.11 \
     python3.11-venv \
@@ -24,13 +26,22 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6 \
     libxrender-dev \
+    git \
     git-lfs \
+    curl \
+    wget \
+    cmake \
+    build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 # Set Python 3.11 as default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Install uv for fast package management
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
