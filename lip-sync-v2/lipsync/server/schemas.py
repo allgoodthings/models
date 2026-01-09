@@ -50,6 +50,13 @@ class LipSyncRequest(BaseModel):
     enhance_quality: bool = Field(
         True, description="Apply GFPGAN enhancement after lip-sync"
     )
+    include_audio: bool = Field(
+        True,
+        description=(
+            "Include audio in output video. Set to False for video-only output "
+            "(useful for multi-language dubbing where you'll add audio separately)"
+        ),
+    )
     loop_mode: Literal["none", "repeat", "pingpong", "crossfade", "smart"] = Field(
         "smart",
         description=(

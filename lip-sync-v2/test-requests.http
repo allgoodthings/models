@@ -195,6 +195,32 @@ Content-Type: application/json
 }
 
 ### =============================================================================
+### Lip-Sync - Video Only (No Audio) - For Multi-Language Dubbing
+### Output video without audio track, add your own audio later
+### =============================================================================
+# @timeout 300000
+POST {{baseUrl}}/lipsync
+Content-Type: application/json
+
+{
+  "video_url": "{{videoUrl}}",
+  "audio_url": "{{audioUrl}}",
+  "upload_url": "YOUR_PRESIGNED_UPLOAD_URL",
+  "characters": [
+    {
+      "id": "speaker",
+      "name": "Speaker",
+      "reference_image_url": "{{refImage}}"
+    }
+  ],
+  "similarity_threshold": 0.5,
+  "enhance_quality": true,
+  "include_audio": false,
+  "loop_mode": "smart",
+  "temporal_smoothing": 0.3
+}
+
+### =============================================================================
 ### Lip-Sync - Multiple Characters
 ### =============================================================================
 # @timeout 300000

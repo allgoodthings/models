@@ -543,9 +543,23 @@ async def lipsync(request: LipSyncRequest):
                 error_message="No characters could be processed",
             )
 
-        # Rename final output
+        # Prepare final output
         import shutil
-        shutil.copy(current_video, output_path)
+        import subprocess
+
+        if request.include_audio:
+            # Keep audio in output
+            shutil.copy(current_video, output_path)
+        else:
+            # Strip audio for video-only output (useful for multi-language dubbing)
+            logger.info("  Stripping audio from output...")
+            strip_cmd = [
+                "ffmpeg", "-y", "-i", current_video,
+                "-c:v", "copy", "-an",  # Copy video, no audio
+                output_path
+            ]
+            subprocess.run(strip_cmd, capture_output=True, check=True)
+            logger.info("  Audio stripped")
 
         # Upload
         try:
