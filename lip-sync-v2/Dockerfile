@@ -5,46 +5,24 @@
 #   docker build -t lip-sync-v2:latest .
 #
 # Run:
-#   docker run --gpus all -p 8000:8000 lip-sync-v2:latest
+#   docker run --gpus all -p 8000:8000 -p 8080:8080 -p 22:22 lip-sync-v2:latest
+#
+# Base image includes: SSH, Jupyter (8080), Python 3.11, uv, build tools
+# Works on: Vast.ai (with portal), RunPod, Lambda, any GPU cloud
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM vastai/base-image:cuda-12.4.1-cudnn-devel-ubuntu22.04-py3.11
 
-# Prevent interactive prompts during apt install
-ENV DEBIAN_FRONTEND=noninteractive
-
-# System dependencies
+# Additional system dependencies (base image has build-essential, cmake, git, curl, wget)
 RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-venv \
-    python3.11-dev \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
-    git \
     git-lfs \
-    curl \
-    wget \
-    cmake \
-    build-essential \
-    openssh-server \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
-
-# Configure SSH for remote access/development
-RUN mkdir -p /var/run/sshd && \
-    echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && \
-    echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
-
-# Set Python 3.11 as default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
-
-# Install uv for fast package management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
