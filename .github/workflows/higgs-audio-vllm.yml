@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: allgoodthings/higgs-audio-vllm
+  IMAGE_NAME: ${{ github.repository_owner }}/higgs-audio-vllm
 
 jobs:
   build-and-push:
