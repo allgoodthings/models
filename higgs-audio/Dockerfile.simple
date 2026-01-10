@@ -1,0 +1,31 @@
+# Simplified Dockerfile for Higgs Audio vLLM
+# Uses official vLLM image as base, overlays boson-ai's modifications
+
+FROM vllm/vllm-openai:v0.8.3
+
+# Paths
+ENV VLLM_PATH=/usr/local/lib/python3.12/dist-packages/vllm
+ENV BOSON_PATH=/usr/local/lib/python3.12/dist-packages/boson_multimodal
+
+# Install higgs-audio dependencies
+COPY requirements/bosonai.txt /tmp/bosonai.txt
+RUN pip install --no-cache-dir -r /tmp/bosonai.txt
+
+# Install higgs-audio from GitHub (the boson_multimodal package)
+RUN pip install --no-cache-dir git+https://github.com/boson-ai/higgs-audio.git
+
+# Fix missing __init__.py files in boson_multimodal (upstream bug)
+# pip doesn't install directories without __init__.py, so we need to copy them manually
+RUN git clone --depth 1 https://github.com/boson-ai/higgs-audio.git /tmp/higgs-audio && \
+    cp -r /tmp/higgs-audio/boson_multimodal/audio_processing $BOSON_PATH/ && \
+    touch $BOSON_PATH/audio_processing/__init__.py && \
+    touch $BOSON_PATH/audio_processing/descriptaudiocodec/__init__.py && \
+    touch $BOSON_PATH/audio_processing/quantization/__init__.py && \
+    rm -rf /tmp/higgs-audio
+
+# Replace entire vllm directory with boson-ai's fork
+# This is necessary because the fork modifies many core files
+COPY vllm/ $VLLM_PATH/
+
+# Set entrypoint for audio server
+ENTRYPOINT ["python3", "-m", "vllm.entrypoints.bosonai.api_server"]

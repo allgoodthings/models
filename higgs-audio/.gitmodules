@@ -1,0 +1,4 @@
+
+[submodule "external/higgs-audio"]
+	path = external/higgs-audio
+	url = https://github.com/boson-ai/higgs-audio.git
