@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'higgs-audio-poc/vllm-v2/**'
+      - '.github/workflows/higgs-audio-vllm.yml'
   workflow_dispatch:  # Allow manual trigger
 
 env:
