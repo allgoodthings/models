@@ -34,6 +34,30 @@ POC for evaluating [Higgs Audio v2](https://github.com/boson-ai/higgs-audio) as 
 
 ## Performance Benchmarks
 
+### Validated Test Results (2026-01-10)
+
+Tested on **NVIDIA GeForce RTX 3090 (24GB)** via Vast.ai:
+
+**Server Stats:**
+| Metric | Value |
+|--------|-------|
+| Model Load Time | 74.4s |
+| VRAM Allocated | 16.28 GB |
+| VRAM Reserved | 17.68 GB |
+| Generation Speed | 3.9-4.5s per request |
+
+**Shakespeare Speech Tests:**
+| Test | Text | Duration | File Size |
+|------|------|----------|-----------|
+| Short | "To be, or not to be..." | 4.0s | 192 KB |
+| Medium | "All the world's a stage..." | 10.0s | 480 KB |
+| Long | Macbeth "Tomorrow" monologue | 37.1s | 1.7 MB |
+| Dramatic | Romeo balcony (with emotional prompt) | 14.4s | 693 KB |
+
+**Audio Quality:** Validated as production-ready for all test cases.
+
+### Earlier Benchmarks
+
 Tested on **NVIDIA RTX PRO 4000 Blackwell (24GB)**:
 
 | Mode | Chunks | Time | Per Chunk |
