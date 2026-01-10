@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: scenema-ai/higgs-audio-vllm
+  IMAGE_NAME: allgoodthings/higgs-audio-vllm
 
 jobs:
   build-and-push:
