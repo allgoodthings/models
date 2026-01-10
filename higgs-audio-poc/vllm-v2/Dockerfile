@@ -6,4 +6,7 @@ FROM bosonai/higgs-audio-vllm:latest
 # when using an audio output tokenizer (non-whisper)
 COPY higgs_audio.py /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/higgs_audio.py
 
+# Add custom voice presets with system prompts for style control
+COPY custom_voices.json /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/bosonai/voice_presets/custom_voices.json
+
 ENTRYPOINT ["python3", "-m", "vllm.entrypoints.bosonai.api_server"]

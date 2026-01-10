@@ -1,0 +1,37 @@
+{
+    "dramatic_actor": {
+        "transcript": "To be or not to be, that is the question.",
+        "audio_file": "en_man.wav",
+        "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA dramatic theatrical performance. The speaker is a classically trained actor delivering lines with gravitas, contemplation, and emotional depth. Pause meaningfully between phrases.\n<|scene_desc_end|>"
+    },
+    "narrator_epic": {
+        "transcript": "In the beginning, there was only darkness.",
+        "audio_file": "en_man.wav",
+        "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nAn epic movie trailer narration. Deep, resonant voice with dramatic pauses and building intensity. Think: \"In a world where...\"\n<|scene_desc_end|>"
+    },
+    "excited_announcer": {
+        "transcript": "Welcome everyone to the show!",
+        "audio_file": "en_man.wav",
+        "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nAn enthusiastic sports announcer or game show host. High energy, upbeat, with emphasis on key words and natural excitement.\n<|scene_desc_end|>"
+    },
+    "whisper_creepy": {
+        "transcript": "Did you hear that sound?",
+        "audio_file": "en_man.wav",
+        "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA horror movie whisper. Soft, unsettling, with an undercurrent of dread. Speak slowly and deliberately.\n<|scene_desc_end|>"
+    },
+    "compassionate_woman": {
+        "transcript": "I understand how you feel.",
+        "audio_file": "en_woman.wav",
+        "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA warm, empathetic female voice. Gentle, caring, and reassuring. The kind of voice that makes you feel heard and understood.\n<|scene_desc_end|>"
+    },
+    "stern_commander": {
+        "transcript": "This is an order, not a request.",
+        "audio_file": "en_man.wav",
+        "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA military commander giving orders. Firm, authoritative, no-nonsense. Clipped sentences with absolute certainty.\n<|scene_desc_end|>"
+    },
+    "calm_narrator": {
+        "transcript": "The story begins on a quiet morning.",
+        "audio_file": "en_man.wav",
+        "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA calm, measured audiobook narrator. Clear enunciation, steady pace, professional but warm. Perfect for long-form content.\n<|scene_desc_end|>"
+    }
+}
