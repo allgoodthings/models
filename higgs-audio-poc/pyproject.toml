@@ -1,0 +1,24 @@
+# Higgs Audio v2 POC
+# For testing boson-ai/higgs-audio as Chatterbox TTS replacement
+#
+# Setup on Vast.ai GPU instance (24GB+ VRAM required):
+#   1. Upload this folder to the instance
+#   2. Run: ./setup.sh
+#   3. Server starts on port 8888
+#
+# Or manual setup:
+#   git clone https://github.com/boson-ai/higgs-audio.git
+#   cd higgs-audio
+#   uv venv --python 3.10
+#   source .venv/bin/activate
+#   uv pip install -r requirements.txt
+#   uv pip install -e .
+#   cd ..
+#   uv pip install -r requirements-server.txt
+#   python server.py
+
+[project]
+name = "higgs-audio-poc"
+version = "0.1.0"
+requires-python = ">=3.10,<3.11"
+description = "POC for testing Higgs Audio v2 TTS"

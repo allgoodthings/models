@@ -1,0 +1,8 @@
+# FastAPI server dependencies
+fastapi>=0.115.0
+uvicorn>=0.32.0
+python-multipart>=0.0.9
+
+# Audio processing
+scipy>=1.11.0
+numpy>=1.24.0
