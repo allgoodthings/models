@@ -202,6 +202,7 @@ class HiggsAudioServingAudio(OpenAIServing):
         result_generator, = generators
 
         # PATCHED: Use single-pass generator instead of streaming
+        logger.info("PATCHED: Returning single-pass generator")
         return self.audio_speech_single_pass_generator(request, result_generator)
 
     async def prepare_engine_prompt(
@@ -314,13 +315,18 @@ class HiggsAudioServingAudio(OpenAIServing):
 
         No chunking = no clicking. Single WAV = correct headers.
         """
+        logger.info("PATCHED: Starting single-pass audio generation")
         start_time = time.time()
 
         # Accumulate ALL audio tokens
         audio_tokens_cache = np.ndarray((0, self.audio_num_codebooks), dtype=np.int64)
 
         try:
+            iteration_count = 0
             async for res in result_generator:
+                iteration_count += 1
+                if iteration_count == 1:
+                    logger.info("PATCHED: First iteration from result_generator")
                 assert len(res.outputs) == 1, "Only one output should be generated per request"
                 output = res.outputs[0]
 
@@ -330,6 +336,8 @@ class HiggsAudioServingAudio(OpenAIServing):
                         audio_tokens_cache,
                         output.mm_token_ids,
                     ], axis=0)
+                    if iteration_count <= 5:
+                        logger.info(f"PATCHED: Accumulated {audio_tokens_cache.shape[0]} tokens so far")
 
             gen_time = time.time() - start_time
             logger.info(f"Token generation: {audio_tokens_cache.shape[0]} tokens in {gen_time:.2f}s")
