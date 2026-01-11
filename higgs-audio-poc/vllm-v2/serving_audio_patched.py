@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # PATCHED: Single-pass audio generation (no streaming/chunking)
 # + Voice caching support (voice_id + voice_url)
-# + SFT mode (system_prompt) vs Voice cloning mode (mutually exclusive)
+# + system_prompt + voice cloning work together (style + voice identity)
 print(">>> PATCHED serving_audio.py LOADED <<<", flush=True)
 import base64
 import hashlib
@@ -424,47 +424,38 @@ class HiggsAudioServingAudio(OpenAIServing):
         """
         Build the message list for TTS generation.
 
-        The model was trained with TWO MUTUALLY EXCLUSIVE modes:
-        1. SFT mode: Custom system_prompt (with scene descriptions) WITHOUT reference audio
-        2. Voice cloning mode: Reference audio WITH default system prompt
+        Supports BOTH system_prompt AND voice cloning together:
+        - system_prompt: Controls style/emotion via scene descriptions
+        - reference_audio: Controls voice identity via in-context learning
 
-        If system_prompt is provided, we use SFT mode (no voice cloning).
-        If no system_prompt, we use voice cloning mode (with reference audio).
+        This matches the original non-vLLM POC behavior.
         """
         # Get preset fallbacks
         preset_audio, preset_text, preset_prompt = self.tts_voice_raw(
             request.voice, self.voice_presets_dir, voice_presets
         )
 
-        # Check if user provided a custom system_prompt
-        custom_system_prompt = getattr(request, 'system_prompt', None)
+        # Resolve system prompt: request > preset > default
+        system_prompt = getattr(request, 'system_prompt', None) or preset_prompt or TTS_SYSTEM_PROMPT
 
-        # SFT mode: Custom system_prompt provided - use it WITHOUT reference audio
-        # This enables emotional/style control via scene descriptions
-        if custom_system_prompt:
-            logger.info("Using SFT mode with custom system_prompt (no reference audio)")
-            messages: list[ChatCompletionMessageParam] = [
-                {"role": "system", "content": custom_system_prompt}
-            ]
-            messages.append({"role": "user", "content": request.input})
-            return messages
-
-        # Voice cloning mode: No custom system_prompt - use reference audio
-        # Use preset's system_prompt or default, and include reference audio for voice cloning
-        system_prompt = preset_prompt or TTS_SYSTEM_PROMPT
+        # Resolve voice reference for cloning
         reference_audio, reference_text = self._resolve_voice_reference(
             request, preset_audio, preset_text
         )
 
-        logger.info("Using voice cloning mode with reference audio")
+        # Build messages: system prompt + voice clone context + user text
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_prompt}
         ]
 
+        # Add voice cloning context if reference audio available
         if reference_audio:
+            logger.info("Adding voice cloning context (reference audio)")
             messages.extend(self._build_voice_clone_messages(reference_audio, reference_text))
 
         messages.append({"role": "user", "content": request.input})
+
+        logger.info(f"Prepared {len(messages)} messages (system_prompt: {len(system_prompt)} chars, has_reference: {bool(reference_audio)})")
         return messages
 
     def tts_voice_raw(self, voice: str, voice_presets_dir: str,
