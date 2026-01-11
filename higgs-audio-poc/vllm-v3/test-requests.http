@@ -1,0 +1,100 @@
+### Higgs Audio v3 - Test Requests
+### Use with VS Code REST Client extension
+
+@baseUrl = http://localhost:8080
+
+### Health Check
+GET {{baseUrl}}/health
+
+### List Available Voices
+GET {{baseUrl}}/v1/audio/voices
+
+### Hello World - Quick Test
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "Hello world, this is a test of the Higgs Audio v3 system.",
+  "voice": "en_man"
+}
+
+>> ./output/hello-world.wav
+
+### Shakespeare - Hamlet "To be or not to be"
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "To be, or not to be, that is the question: Whether 'tis nobler in the mind to suffer The slings and arrows of outrageous fortune, Or to take arms against a sea of troubles And by opposing end them. To die, to sleep, No more; and by a sleep to say we end The heartache and the thousand natural shocks That flesh is heir to: 'tis a consummation Devoutly to be wished.",
+  "voice": "dramatic_actor",
+  "temperature": 0.7
+}
+
+>> ./output/hamlet-dramatic.wav
+
+### Shakespeare - Macbeth "Tomorrow and tomorrow"
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "Tomorrow, and tomorrow, and tomorrow, Creeps in this petty pace from day to day, To the last syllable of recorded time; And all our yesterdays have lighted fools The way to dusty death. Out, out, brief candle! Life's but a walking shadow, a poor player, That struts and frets his hour upon the stage, And then is heard no more. It is a tale Told by an idiot, full of sound and fury, Signifying nothing.",
+  "voice": "dramatic_actor"
+}
+
+>> ./output/macbeth-tomorrow.wav
+
+### Epic Movie Trailer Narration
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "In a world where darkness reigned supreme, one hero would rise to challenge the impossible. This summer, witness the battle that will determine the fate of humanity.",
+  "voice": "narrator_epic"
+}
+
+>> ./output/epic-trailer.wav
+
+### Calm Audiobook Narration
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "Chapter one. The morning sun rose over the quiet village, casting long shadows across the cobblestone streets. It was a day like any other, or so it seemed. But for young Thomas, this day would mark the beginning of an adventure beyond his wildest dreams.",
+  "voice": "calm_narrator"
+}
+
+>> ./output/audiobook-chapter.wav
+
+### Female Voice - Portia's Mercy Speech
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "The quality of mercy is not strained. It droppeth as the gentle rain from heaven Upon the place beneath. It is twice blessed: It blesseth him that gives and him that takes. 'Tis mightiest in the mightiest; it becomes The throned monarch better than his crown.",
+  "voice": "en_woman"
+}
+
+>> ./output/portia-mercy.wav
+
+### Custom Scene Description
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "Warning. Intruder detected in sector seven. All personnel evacuate immediately.",
+  "scene_description": "An urgent robotic announcement over a space station PA system. Cold, synthetic, slightly distorted."
+}
+
+>> ./output/custom-robot.wav
+
+### Long Text - MLK Dream Speech Excerpt
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "text": "I have a dream that one day this nation will rise up and live out the true meaning of its creed: We hold these truths to be self-evident, that all men are created equal. I have a dream that one day on the red hills of Georgia, the sons of former slaves and the sons of former slave owners will be able to sit down together at the table of brotherhood.",
+  "voice": "dramatic_actor",
+  "max_tokens": 6000
+}
+
+>> ./output/mlk-dream.wav
