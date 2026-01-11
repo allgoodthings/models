@@ -17,6 +17,9 @@ COPY higgs_audio.py /usr/local/lib/python3.12/dist-packages/vllm/model_executor/
 # - Fixes WAV headers (single file with correct duration)
 COPY serving_audio_patched.py /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/bosonai/serving_audio.py
 
+# Fix 3: Add system_prompt field to AudioSpeechRequest for dynamic style control
+COPY protocol_patched.py /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/protocol.py
+
 # Add custom voice presets with system prompts for style control
 COPY custom_voices.json /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/bosonai/voice_presets/custom_voices.json
 

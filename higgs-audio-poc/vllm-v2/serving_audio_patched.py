@@ -263,23 +263,32 @@ class HiggsAudioServingAudio(OpenAIServing):
         voice_presets: Optional[dict] = None
     ) -> list[ChatCompletionMessageParam]:
         messages: list[ChatCompletionMessageParam] = []
-        audio_base64, reference_text, system_prompt = \
+
+        # Get preset values as fallbacks
+        preset_audio_base64, preset_reference_text, preset_system_prompt = \
             self.tts_voice_raw(request.voice, self.voice_presets_dir, voice_presets)
+
+        # Priority: request values > preset values > defaults
+        system_prompt = getattr(request, 'system_prompt', None) or preset_system_prompt
+        reference_audio = getattr(request, 'reference_audio', None) or preset_audio_base64
+        reference_text = getattr(request, 'reference_text', None) or preset_reference_text
+
         messages.append({
             "role": "system",
             "content": system_prompt or TTS_SYSTEM_PROMPT
         })
 
-        # SFT model uses system prompt instead of reference audio for TTS
-        if system_prompt is None:
+        # Use reference audio for voice cloning if:
+        # 1. No custom system_prompt provided (SFT mode uses system prompt only)
+        # 2. Reference audio is available (either from request or preset)
+        if system_prompt is None and reference_audio:
             messages.append({"role": "user", "content": reference_text})
             messages.append({
-                "role":
-                "assistant",
+                "role": "assistant",
                 "content": [{
                     "type": "input_audio",
                     "input_audio": {
-                        "data": audio_base64,
+                        "data": reference_audio,
                         "format": "wav"
                     }
                 }]
