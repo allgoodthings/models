@@ -247,3 +247,79 @@ Content-Type: application/json
 }
 
 >> /Users/biz/Desktop/higgs-audio-tests/vllm2/dynamic-scared.wav
+
+### =========================================
+### CUSTOM VOICE (voice_id + voice_url)
+### Priority: disk cache -> network download -> preset
+### =========================================
+
+### Custom voice - will download and cache on first request
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "higgs-audio-v2",
+  "input": "Hello, this is my custom voice speaking.",
+  "voice": "en_man",
+  "response_format": "wav",
+  "voice_id": "actor-john-smith",
+  "voice_url": "https://your-cdn.com/voices/john-smith.wav",
+  "reference_text": "This is what the speaker says in the reference audio."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-voice.wav
+
+### =========================================
+### CUSTOM VOICE + SYSTEM PROMPT (COMBINED)
+### =========================================
+
+### Custom Voice + Dramatic Style
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "higgs-audio-v2",
+  "input": "To be, or not to be, that is the question.",
+  "voice": "en_man",
+  "response_format": "wav",
+  "voice_id": "actor-john-smith",
+  "voice_url": "https://your-cdn.com/voices/john-smith.wav",
+  "reference_text": "Reference audio transcript.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA theatrical, dramatic performance. Slow, deliberate pacing with emotional weight on each word.\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-dramatic.wav
+
+### Custom Voice + Whispered Style
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "higgs-audio-v2",
+  "input": "I have a secret to tell you. Come closer.",
+  "voice": "en_woman",
+  "response_format": "wav",
+  "voice_id": "actor-john-smith",
+  "voice_url": "https://your-cdn.com/voices/john-smith.wav",
+  "reference_text": "Reference audio transcript.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA soft, intimate whisper. Very quiet, close to the microphone, breathy quality.\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-whisper.wav
+
+### Custom Voice + Angry Style
+POST {{baseUrl}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "higgs-audio-v2",
+  "input": "I told you not to do that! Why don't you ever listen?",
+  "voice": "en_man",
+  "response_format": "wav",
+  "voice_id": "actor-john-smith",
+  "voice_url": "https://your-cdn.com/voices/john-smith.wav",
+  "reference_text": "Reference audio transcript.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nControlled anger, frustration building. Sharp consonants, tense delivery, rising intensity.\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-angry.wav

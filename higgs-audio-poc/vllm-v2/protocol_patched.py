@@ -1776,13 +1776,16 @@ class AudioSpeechRequest(OpenAIBaseModel):
     """ The overlap size of the audio chunk """
 
     system_prompt: Optional[str] = None
-    """ Optional system prompt for controlling voice style/emotion at runtime """
+    """ System prompt for controlling voice style/emotion. """
 
-    reference_audio: Optional[str] = None
-    """ Optional base64-encoded reference audio for voice cloning """
+    voice_id: Optional[str] = None
+    """ Voice ID for caching. Checked on disk first, then downloaded from voice_url if not cached. """
+
+    voice_url: Optional[str] = None
+    """ URL to download voice audio from (only used if voice_id not in cache). """
 
     reference_text: Optional[str] = None
-    """ Optional transcript of the reference audio for voice cloning """
+    """ Transcript of the reference audio for voice cloning. """
 
     def to_sampling_params(self) -> SamplingParams:
         return SamplingParams.from_optional(

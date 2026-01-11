@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # PATCHED: Single-pass audio generation (no streaming/chunking)
+# + Voice caching support (voice_id + voice_url)
+# + Combined system_prompt + voice cloning
 print(">>> PATCHED serving_audio.py LOADED <<<", flush=True)
 import base64
+import hashlib
 import io
 import json
 import os
+import threading
 import time
 import traceback
+import urllib.request
 from collections.abc import AsyncGenerator, AsyncIterator
 from functools import lru_cache
 from typing import Any, Final, Optional
+
+# Voice cache directory
+VOICE_CACHE_DIR = os.environ.get("VOICE_CACHE_DIR", "/tmp/voice_cache")
 
 import librosa
 import numpy as np
@@ -52,6 +60,110 @@ def encode_base64_content_from_file(file_path: str) -> str:
     with open(file_path, "rb") as audio_file:
         audio_base64 = base64.b64encode(audio_file.read()).decode("utf-8")
     return audio_base64
+
+
+class VoiceCache:
+    """Thread-safe file-based cache for voice audio and metadata."""
+
+    def __init__(self, cache_dir: str = VOICE_CACHE_DIR):
+        self.cache_dir = cache_dir
+        self._locks: dict[str, threading.Lock] = {}
+        self._global_lock = threading.Lock()
+
+    def _get_lock(self, voice_id: str) -> threading.Lock:
+        """Get or create a lock for a specific voice_id."""
+        with self._global_lock:
+            if voice_id not in self._locks:
+                self._locks[voice_id] = threading.Lock()
+            return self._locks[voice_id]
+
+    def _get_paths(self, voice_id: str) -> tuple[str, str]:
+        """Get filesystem paths for voice audio and metadata."""
+        safe_id = hashlib.md5(voice_id.encode()).hexdigest()[:16]
+        return (
+            os.path.join(self.cache_dir, f"{safe_id}.wav"),
+            os.path.join(self.cache_dir, f"{safe_id}.json"),
+        )
+
+    def _load_metadata(self, meta_path: str) -> Optional[str]:
+        """Load reference_text from metadata file."""
+        if not os.path.exists(meta_path):
+            return None
+        try:
+            with open(meta_path, "r") as f:
+                return json.load(f).get("reference_text")
+        except Exception as e:
+            logger.warning(f"Failed to load metadata: {e}")
+            return None
+
+    def _save_metadata(self, meta_path: str, voice_id: str, reference_text: str) -> None:
+        """Save reference_text to metadata file."""
+        try:
+            with open(meta_path, "w") as f:
+                json.dump({"voice_id": voice_id, "reference_text": reference_text}, f)
+        except Exception as e:
+            logger.warning(f"Failed to save metadata: {e}")
+
+    def get(self, voice_id: str) -> tuple[Optional[str], Optional[str]]:
+        """Get cached voice. Returns (base64_audio, reference_text) or (None, None)."""
+        audio_path, meta_path = self._get_paths(voice_id)
+        if not os.path.exists(audio_path):
+            return None, None
+        return encode_base64_content_from_file(audio_path), self._load_metadata(meta_path)
+
+    def download_and_cache(
+        self, voice_id: str, voice_url: str, reference_text: Optional[str] = None
+    ) -> tuple[str, Optional[str]]:
+        """
+        Download voice from URL and cache. Thread-safe with per-voice locking.
+        Uses atomic write (temp file + rename) to prevent corruption.
+        Returns (base64_audio, reference_text).
+        """
+        audio_path, meta_path = self._get_paths(voice_id)
+
+        # Fast path: already cached (no lock needed for read)
+        if os.path.exists(audio_path):
+            logger.info(f"Voice cache hit: {voice_id}")
+            return self.get(voice_id)[0], reference_text or self._load_metadata(meta_path)
+
+        # Slow path: need to download (acquire per-voice lock)
+        lock = self._get_lock(voice_id)
+        with lock:
+            # Double-check after acquiring lock (another thread may have downloaded)
+            if os.path.exists(audio_path):
+                logger.info(f"Voice cache hit (after lock): {voice_id}")
+                return self.get(voice_id)[0], reference_text or self._load_metadata(meta_path)
+
+            # Download
+            os.makedirs(self.cache_dir, exist_ok=True)
+            logger.info(f"Downloading voice {voice_id} from {voice_url}")
+
+            try:
+                with urllib.request.urlopen(voice_url, timeout=30) as response:
+                    audio_data = response.read()
+            except Exception as e:
+                raise ValueError(f"Failed to download voice: {e}") from e
+
+            # Atomic write: write to temp file, then rename
+            temp_path = audio_path + f".tmp.{os.getpid()}"
+            try:
+                with open(temp_path, "wb") as f:
+                    f.write(audio_data)
+                os.rename(temp_path, audio_path)  # Atomic on POSIX
+            except Exception:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
+
+            if reference_text:
+                self._save_metadata(meta_path, voice_id, reference_text)
+
+            logger.info(f"Cached voice {voice_id} ({len(audio_data)} bytes)")
+            return base64.b64encode(audio_data).decode("utf-8"), reference_text
+
+
+# Global voice cache instance
+voice_cache = VoiceCache()
 
 
 def pcm_to_target_format_bytes(pcm_data: np.ndarray, response_format: str,
@@ -257,45 +369,79 @@ class HiggsAudioServingAudio(OpenAIServing):
 
         return engine_prompt
 
+    def _resolve_voice_reference(
+        self,
+        request: AudioSpeechRequest,
+        preset_audio: str,
+        preset_text: str,
+    ) -> tuple[str, str]:
+        """
+        Resolve voice reference audio and text.
+        Priority: disk cache -> network download -> preset
+        """
+        voice_id = getattr(request, 'voice_id', None)
+        voice_url = getattr(request, 'voice_url', None)
+        ref_text = getattr(request, 'reference_text', None) or preset_text
+
+        if not voice_id:
+            return preset_audio, ref_text
+
+        # Try disk cache first
+        cached_audio, cached_text = voice_cache.get(voice_id)
+        if cached_audio:
+            logger.info(f"Voice cache hit: {voice_id}")
+            return cached_audio, cached_text or ref_text
+
+        # Download from network if URL provided
+        if voice_url:
+            audio, _ = voice_cache.download_and_cache(voice_id, voice_url, ref_text)
+            return audio, ref_text
+
+        # Fall back to preset
+        logger.warning(f"Voice {voice_id} not cached and no URL provided")
+        return preset_audio, ref_text
+
+    def _build_voice_clone_messages(
+        self, reference_audio: str, reference_text: str
+    ) -> list[ChatCompletionMessageParam]:
+        """Build the user/assistant message pair for voice cloning."""
+        return [
+            {"role": "user", "content": reference_text or "Reference audio."},
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "input_audio",
+                    "input_audio": {"data": reference_audio, "format": "wav"}
+                }]
+            }
+        ]
+
     def prepare_messages(
         self,
         request: AudioSpeechRequest,
         voice_presets: Optional[dict] = None
     ) -> list[ChatCompletionMessageParam]:
-        messages: list[ChatCompletionMessageParam] = []
+        """Build the message list for TTS generation."""
+        # Get preset fallbacks
+        preset_audio, preset_text, preset_prompt = self.tts_voice_raw(
+            request.voice, self.voice_presets_dir, voice_presets
+        )
 
-        # Get preset values as fallbacks
-        preset_audio_base64, preset_reference_text, preset_system_prompt = \
-            self.tts_voice_raw(request.voice, self.voice_presets_dir, voice_presets)
+        # Resolve system prompt and voice reference
+        system_prompt = getattr(request, 'system_prompt', None) or preset_prompt or TTS_SYSTEM_PROMPT
+        reference_audio, reference_text = self._resolve_voice_reference(
+            request, preset_audio, preset_text
+        )
 
-        # Priority: request values > preset values > defaults
-        system_prompt = getattr(request, 'system_prompt', None) or preset_system_prompt
-        reference_audio = getattr(request, 'reference_audio', None) or preset_audio_base64
-        reference_text = getattr(request, 'reference_text', None) or preset_reference_text
+        # Build messages
+        messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": system_prompt}
+        ]
 
-        messages.append({
-            "role": "system",
-            "content": system_prompt or TTS_SYSTEM_PROMPT
-        })
-
-        # Use reference audio for voice cloning if:
-        # 1. No custom system_prompt provided (SFT mode uses system prompt only)
-        # 2. Reference audio is available (either from request or preset)
-        if system_prompt is None and reference_audio:
-            messages.append({"role": "user", "content": reference_text})
-            messages.append({
-                "role": "assistant",
-                "content": [{
-                    "type": "input_audio",
-                    "input_audio": {
-                        "data": reference_audio,
-                        "format": "wav"
-                    }
-                }]
-            })
+        if reference_audio:
+            messages.extend(self._build_voice_clone_messages(reference_audio, reference_text))
 
         messages.append({"role": "user", "content": request.input})
-
         return messages
 
     def tts_voice_raw(self, voice: str, voice_presets_dir: str,
