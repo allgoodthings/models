@@ -455,7 +455,21 @@ class HiggsAudioServingAudio(OpenAIServing):
 
         messages.append({"role": "user", "content": request.input})
 
-        logger.info(f"Prepared {len(messages)} messages (system_prompt: {len(system_prompt)} chars, has_reference: {bool(reference_audio)})")
+        # Debug: log full message structure
+        logger.info(f"=== PREPARE_MESSAGES DEBUG ===")
+        logger.info(f"request.system_prompt: {getattr(request, 'system_prompt', None)[:100] if getattr(request, 'system_prompt', None) else None}...")
+        logger.info(f"preset_prompt: {preset_prompt[:100] if preset_prompt else None}...")
+        logger.info(f"final system_prompt: {system_prompt[:100]}...")
+        logger.info(f"has_reference_audio: {bool(reference_audio)}")
+        logger.info(f"num_messages: {len(messages)}")
+        for i, msg in enumerate(messages):
+            content = msg.get('content', '')
+            if isinstance(content, str):
+                logger.info(f"  msg[{i}] role={msg['role']} content={content[:100]}...")
+            else:
+                logger.info(f"  msg[{i}] role={msg['role']} content=<audio>")
+        logger.info(f"=== END DEBUG ===")
+
         return messages
 
     def tts_voice_raw(self, voice: str, voice_presets_dir: str,
