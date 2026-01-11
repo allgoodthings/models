@@ -1,7 +1,8 @@
 ### Higgs Audio vLLM v2 - Test Requests
 ### Use with VS Code REST Client extension
 
-@baseUrl = http://213.224.31.105:23790
+# RunPod proxy URL (change pod ID as needed)
+@baseUrl = https://se0nrgp8z06lgd-8000.proxy.runpod.net
 
 ### Health Check
 GET {{baseUrl}}/health
@@ -17,78 +18,78 @@ POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "Hello world, this is a test of the Higgs Audio system.",
   "voice": "en_man",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/hello-world.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/hello-world-3.wav
 
 ### Shakespeare - Hamlet "To be or not to be"
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "To be, or not to be, that is the question: Whether 'tis nobler in the mind to suffer The slings and arrows of outrageous fortune, Or to take arms against a sea of troubles And by opposing end them. To die, to sleep, No more; and by a sleep to say we end The heartache and the thousand natural shocks That flesh is heir to: 'tis a consummation Devoutly to be wished.",
   "voice": "en_man",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/hamlet-to-be.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/hamlet-to-be.wav
 
 ### Shakespeare - Macbeth "Tomorrow and tomorrow"
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "Tomorrow, and tomorrow, and tomorrow, Creeps in this petty pace from day to day, To the last syllable of recorded time; And all our yesterdays have lighted fools The way to dusty death. Out, out, brief candle! Life's but a walking shadow, a poor player, That struts and frets his hour upon the stage, And then is heard no more. It is a tale Told by an idiot, full of sound and fury, Signifying nothing.",
   "voice": "en_man",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/macbeth-tomorrow.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/macbeth-tomorrow.wav
 
 ### Shakespeare - Merchant of Venice "Quality of Mercy" (Female)
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "The quality of mercy is not strained. It droppeth as the gentle rain from heaven Upon the place beneath. It is twice blessed: It blesseth him that gives and him that takes. 'Tis mightiest in the mightiest; it becomes The throned monarch better than his crown.",
   "voice": "en_woman",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/portia-mercy.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/portia-mercy.wav
 
 ### Dramatic Narration
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "In the beginning, there was darkness. A void stretching endlessly across the cosmos. And then, in a moment that would echo through eternity, light emerged.",
   "voice": "en_man",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/epic-narration.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/epic-narration.wav
 
 ### Chinese Male Voice
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "Hello, welcome to our service. How may I assist you today?",
   "voice": "zh_man_sichuan",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/chinese-voice.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/chinese-voice.wav
 
 ### =========================================
 ### CUSTOM VOICES WITH SYSTEM PROMPTS
@@ -100,88 +101,88 @@ POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "To be, or not to be, that is the question: Whether 'tis nobler in the mind to suffer The slings and arrows of outrageous fortune, Or to take arms against a sea of troubles.",
   "voice": "dramatic_actor",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/-dramatic-hamlet.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/-dramatic-hamlet.wav
 
 ### Epic Narrator - Movie Trailer Style
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "In a world where darkness reigned supreme, one hero would rise to challenge the impossible. This summer, destiny awaits.",
   "voice": "narrator_epic",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/-epic-trailer.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/-epic-trailer.wav
 
 ### Excited Announcer
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "Ladies and gentlemen, welcome to the greatest show on earth! You are not going to believe what happens next!",
   "voice": "excited_announcer",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/-excited-announcer.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/-excited-announcer.wav
 
 ### Creepy Whisper - Horror
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "Did you hear that? It's coming from inside the walls. They've been watching us this whole time.",
   "voice": "whisper_creepy",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/-creepy-whisper.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/-creepy-whisper.wav
 
 ### Compassionate Woman
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "I understand how difficult this must be for you. Take all the time you need. We're here for you.",
   "voice": "compassionate_woman",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/-compassionate.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/-compassionate.wav
 
 ### Stern Commander
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "Listen up! This is not a drill. I need everyone at their stations in sixty seconds. Move it!",
   "voice": "stern_commander",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/-commander.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/-commander.wav
 
 ### Calm Narrator - Audiobook Style
 POST {{baseUrl}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "bosonai/higgs-audio-v2-generation-3B-base",
+  "model": "higgs-audio-v2",
   "input": "Chapter one. The morning sun rose over the quiet village, casting long shadows across the cobblestone streets. It was a day like any other, or so it seemed.",
   "voice": "calm_narrator",
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm/-audiobook.wav
+>> /Users/biz/Desktop/higgs-audio-tests/vllm2/-audiobook.wav

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # PATCHED: Single-pass audio generation (no streaming/chunking)
+print(">>> PATCHED serving_audio.py LOADED <<<", flush=True)
 import base64
 import io
 import json
@@ -202,6 +203,7 @@ class HiggsAudioServingAudio(OpenAIServing):
         result_generator, = generators
 
         # PATCHED: Use single-pass generator instead of streaming
+        print(">>> PATCHED: Returning single-pass generator <<<", flush=True)
         logger.info("PATCHED: Returning single-pass generator")
         return self.audio_speech_single_pass_generator(request, result_generator)
 
