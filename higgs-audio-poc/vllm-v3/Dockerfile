@@ -1,9 +1,10 @@
 # Higgs Audio v3 - Integrated vLLM Server
-# Layers our clean audio decoding on top of bosonai's vLLM image
+# Uses our v2 image (with is_audio_out_model fix) as base
+# Adds our clean audio decoding server
 
-FROM bosonai/higgs-audio-vllm:latest
+FROM ghcr.io/allgoodthings/higgs-audio-vllm:latest
 
-# Copy our server (replaces their buggy audio endpoint)
+# Copy our server (replaces their buggy audio endpoint with proper decoding)
 COPY server_integrated.py /app/server.py
 
 # Expose our port
