@@ -63,6 +63,7 @@ EXPOSE 8000
 # Set environment
 ENV VOICE_CACHE_DIR=/tmp/voice_cache
 
-# Run server
+# Run server - override nvidia entrypoint
 WORKDIR /workspace
-CMD ["/workspace/higgs-audio/.venv/bin/python", "server.py"]
+ENTRYPOINT ["/workspace/higgs-audio/.venv/bin/python"]
+CMD ["server.py"]
