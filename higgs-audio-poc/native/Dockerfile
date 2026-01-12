@@ -20,11 +20,8 @@ RUN apt-get update && apt-get install -y \
 
 # Set Python 3.10 as default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
-
-# Install uv for fast package management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 \
+    && update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
 
 WORKDIR /workspace
 
@@ -33,23 +30,18 @@ RUN git clone https://github.com/boson-ai/higgs-audio.git
 
 WORKDIR /workspace/higgs-audio
 
-# Create virtual environment and install dependencies
-RUN uv venv --python 3.10
-
-# Install higgs-audio dependencies
-RUN . .venv/bin/activate && \
-    uv pip install -r requirements.txt && \
-    uv pip install -e .
+# Install higgs-audio dependencies (no venv - we're in a container)
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -e .
 
 # Install server dependencies
-RUN . .venv/bin/activate && \
-    uv pip install \
-        fastapi \
-        uvicorn \
-        python-multipart \
-        scipy \
-        numpy \
-        torchaudio
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    python-multipart \
+    scipy \
+    numpy \
+    torchaudio
 
 # Copy server code
 COPY server.py /workspace/server.py
@@ -63,7 +55,7 @@ EXPOSE 8000
 # Set environment
 ENV VOICE_CACHE_DIR=/tmp/voice_cache
 
-# Run server - override nvidia entrypoint
+# Run server
 WORKDIR /workspace
-ENTRYPOINT ["/workspace/higgs-audio/.venv/bin/python"]
+ENTRYPOINT ["python"]
 CMD ["server.py"]
