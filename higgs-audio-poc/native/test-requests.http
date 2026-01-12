@@ -1,0 +1,186 @@
+### Higgs Audio Native POC - Test Requests
+### Use with VS Code REST Client extension
+### Testing: system_prompt + voice cloning together
+
+# RunPod/Vast.ai proxy URL (change as needed)
+@baseUrl = http://localhost:8000
+
+### Health Check
+GET {{baseUrl}}/health
+
+### =========================================
+### TEST 1: System Prompt ONLY (no voice cloning)
+### This should work - emotional expression via scene description
+### =========================================
+
+### Sad/Melancholic - No voice cloning
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "I never thought it would end this way. After all these years, all we've been through together.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA deeply sad and melancholic delivery. The speaker is reflecting on loss with a heavy heart. Voice should crack slightly with emotion, slow pace, long pauses between phrases.\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-sad-no-clone.wav
+
+### Angry - No voice cloning
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "You think you can just walk in here and take everything? I don't think so. Not today.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nControlled anger building to confrontation. The speaker is holding back rage but it seeps through. Tense, clipped words, rising intensity, menacing undertone.\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-angry-no-clone.wav
+
+### Scared - No voice cloning
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Something's in the house. I can hear it moving. Please, someone help me.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nGenuine terror and fear. The speaker is trying to stay quiet but panic is setting in. Whispered, shaky voice, quick shallow breaths, trembling words.\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-scared-no-clone.wav
+
+### =========================================
+### TEST 2: Voice Cloning ONLY (no system prompt)
+### Uses default system prompt
+### =========================================
+
+### Voice clone with default prompt (needs voice_url to real audio)
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Hello, this is a test of voice cloning without a custom system prompt.",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "This is what the speaker says in the reference audio."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test2-clone-no-prompt.wav
+
+### =========================================
+### TEST 3: System Prompt + Voice Cloning TOGETHER
+### THE CRITICAL TEST - does this work in native implementation?
+### =========================================
+
+### Sad + Voice Clone
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "I never thought it would end this way. After all these years, all we've been through together.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA deeply sad and melancholic delivery. The speaker is reflecting on loss with a heavy heart. Voice should crack slightly with emotion, slow pace, long pauses between phrases.\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "This is what the speaker says in the reference audio."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test3-sad-WITH-clone.wav
+
+### Angry + Voice Clone
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "You think you can just walk in here and take everything? I don't think so. Not today.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nControlled anger building to confrontation. The speaker is holding back rage but it seeps through. Tense, clipped words, rising intensity, menacing undertone.\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "This is what the speaker says in the reference audio."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test3-angry-WITH-clone.wav
+
+### Scared + Voice Clone
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Something's in the house. I can hear it moving. Please, someone help me.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nGenuine terror and fear. The speaker is trying to stay quiet but panic is setting in. Whispered, shaky voice, quick shallow breaths, trembling words.\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "This is what the speaker says in the reference audio."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test3-scared-WITH-clone.wav
+
+### Excited + Voice Clone
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Oh my god, I can't believe it! We actually did it! This is the best day of my life!",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nPure joy and excitement. The speaker just received amazing news. Voice is bright, energetic, with natural laughter bubbling through. Fast pace, rising intonation.\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "This is what the speaker says in the reference audio."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test3-excited-WITH-clone.wav
+
+### =========================================
+### TEST 4: Comparison - Same text, same voice, different emotions
+### If system_prompt works with cloning, these should sound different
+### =========================================
+
+### Neutral baseline
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "The package has arrived at the front door.",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "Reference audio transcript."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-neutral.wav
+
+### Same text - Happy
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "The package has arrived at the front door.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nExcited and happy. The speaker is delighted about the delivery. Bright, upbeat tone.\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "Reference audio transcript."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-happy.wav
+
+### Same text - Suspicious
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "The package has arrived at the front door.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSuspicious and wary. The speaker wasn't expecting any package. Slow, questioning tone with an undertone of concern.\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "Reference audio transcript."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-suspicious.wav
+
+### Same text - Terrified
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "The package has arrived at the front door.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nTerrified. The speaker knows something dangerous is in that package. Trembling, whispered, barely able to get the words out.\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "Reference audio transcript."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-terrified.wav
