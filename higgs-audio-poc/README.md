@@ -74,8 +74,10 @@ Tested on **NVIDIA RTX PRO 4000 Blackwell (24GB)**:
 | Model Size | 3.6B + 2.2B params | ~2B params |
 | Voice Cloning | Zero-shot | Zero-shot |
 | Multi-speaker | Native support | Not supported |
-| Emotional Control | Strong (75.7% vs GPT-4o-mini) | Limited |
+| Emotional Control | Weak* (base model) | Limited |
 | Quantization | Community forks | Not available |
+
+*Official benchmarks claim 75.7% vs GPT-4o-mini, but testing shows the **base model** has weak emotional control. See [Evaluation Results](#evaluation-results-2026-01-11).
 
 ## Quantized Alternatives
 
@@ -233,6 +235,87 @@ curl -X POST "http://localhost:8000/v1/audio/speech" \
 3. **For 16GB VRAM**: Use 8-bit quantization via faster-higgs-audio fork
 4. **For 8GB VRAM**: Use 8-bit quantization with careful memory management
 5. **For <8GB VRAM**: Not recommended; use CPU offloading (very slow)
+
+## Evaluation Results (2026-01-11)
+
+### Emotional/Characteristic Control: WEAK
+
+**Finding:** The base model (`higgs-audio-v2-generation-3B-base`) has **weak and inconsistent** emotional control despite official benchmarks claiming 75.7% vs GPT-4o-mini.
+
+Per official documentation: *"The base model has not been post-trained."* Emotions are inferred from **text semantics** (the content of words), not from explicit system prompts.
+
+**Tested Formats:**
+1. ❌ Emotion names: `"happy"`, `"angry"`, `"scared"` - No effect
+2. ❌ Natural language: `"sounds excited and energetic"` - Minimal effect
+3. ⚠️ Voice characteristics: `"whispered;breathy;fast pace"` - Inconsistent results
+
+**Correct Scene Description Format:**
+```
+Generate audio following instruction.
+
+<|scene_desc_start|>
+SPEAKER0: whispered;breathy;trembling;slow pace;feminine
+<|scene_desc_end|>
+```
+
+Available characteristics (from official examples):
+- **Volume:** whispered, hushed, soft, loud
+- **Pace:** slow pace, moderate pace, fast pace
+- **Pitch:** low pitch, moderate pitch, high pitch, deep
+- **Tone:** monotone, breathy, calm, energetic, bright, expressive
+- **Style:** vocal fry, trembling, articulate, clear
+- **Gender:** masculine, feminine
+- **Age:** young adult, mature
+- **Accent:** british accent, american accent
+
+**Test Results:**
+| Prompt | Expected | Actual |
+|--------|----------|--------|
+| `whispered;breathy;trembling` (scared text) | Whispered, fearful | Neutral delivery |
+| `loud;aggressive;fast pace` (angry text) | Loud, intense | Slightly faster, still neutral |
+| `energetic;fast pace;high pitch` (excited text) | Upbeat, excited | Starts neutral, ends high-pitched |
+
+**Conclusion:** The base model cannot reliably produce emotional speech. The "75.7% emotional accuracy" benchmark likely applies to a **post-trained** variant not publicly available.
+
+### Voice Cloning: GOOD
+
+Voice identity cloning works well. The model accurately reproduces speaker characteristics from reference audio. Tested with:
+- 5-10 second reference clips
+- Clear audio with minimal background noise
+- Provided transcript matching reference audio
+
+### Concurrency
+
+| Backend | Max Batch | Concurrent Requests | Notes |
+|---------|-----------|---------------------|-------|
+| serve_engine | 1 | Sequential only | ~4s per request |
+| vLLM | Configurable | Yes | 10-20x throughput |
+
+The default `HiggsAudioServeEngine` has `max_batch_size=1`. For production, vLLM is required.
+
+### Memory Usage
+
+| Configuration | VRAM | Notes |
+|---------------|------|-------|
+| Full precision (bf16) | 17-18 GB | Minimum for RTX 3090/4090 |
+| 8-bit quantization | ~7 GB | Community fork (faster-higgs-audio) |
+| 4-bit quantization | ~5 GB | Requires careful temperature tuning |
+
+### Recommendation
+
+**For production use with emotional control requirements:**
+- ❌ Do NOT use Higgs Audio v2 base model
+- Consider alternatives with stronger emotional control:
+  - **FishAudio OpenAudio S1** - Apache 2.0, better emotion handling
+  - **IndexTTS-2** - Apache 2.0, strong prosody control
+  - **Chatterbox TTS** - Current production model, proven reliability
+  - **XTTS-v2** - Coqui, multilingual with emotion control
+
+**For production use where voice cloning is primary requirement (emotions not critical):**
+- ✅ Higgs Audio v2 with vLLM backend is viable
+- Good voice identity cloning
+- High throughput with vLLM
+- Multilingual support
 
 ## Sources
 
