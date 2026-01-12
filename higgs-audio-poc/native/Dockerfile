@@ -43,10 +43,10 @@ RUN pip install --no-cache-dir \
     numpy \
     torchaudio
 
-# Copy server code and start script
-COPY server.py /workspace/server.py
-COPY start.sh /workspace/start.sh
-RUN chmod +x /workspace/start.sh
+# Copy server code and start script to /app (not /workspace - RunPod mounts volume there)
+COPY server.py /app/server.py
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 # Create voice cache directory
 RUN mkdir -p /tmp/voice_cache
@@ -57,6 +57,6 @@ EXPOSE 8000
 # Set environment
 ENV VOICE_CACHE_DIR=/tmp/voice_cache
 
-# Run server (start.sh ignores extra args from RunPod)
-WORKDIR /workspace
-CMD ["/workspace/start.sh"]
+# Run server
+WORKDIR /app
+CMD ["/app/start.sh"]
