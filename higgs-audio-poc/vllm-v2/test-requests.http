@@ -2,7 +2,7 @@
 ### Use with VS Code REST Client extension
 
 # RunPod proxy URL (change pod ID as needed)
-@baseUrl = https://uyn0o2spic8e8r-8000.proxy.runpod.net
+@baseUrl = https://d9f1l8ohnlzc2a-8000.proxy.runpod.net/
 
 ### Health Check
 GET {{baseUrl}}/health
@@ -24,7 +24,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/hello-world-4.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/hello-world-5.wav
 
 ### Shakespeare - Hamlet "To be or not to be"
 POST {{baseUrl}}/v1/audio/speech
@@ -37,7 +37,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/hamlet-to-be.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/hamlet-to-be.wav
 
 ### Shakespeare - Macbeth "Tomorrow and tomorrow"
 POST {{baseUrl}}/v1/audio/speech
@@ -50,7 +50,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/macbeth-tomorrow.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/macbeth-tomorrow.wav
 
 ### Shakespeare - Merchant of Venice "Quality of Mercy" (Female)
 POST {{baseUrl}}/v1/audio/speech
@@ -63,7 +63,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/portia-mercy.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/portia-mercy.wav
 
 ### Dramatic Narration
 POST {{baseUrl}}/v1/audio/speech
@@ -76,7 +76,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/epic-narration.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/epic-narration.wav
 
 ### Chinese Male Voice
 POST {{baseUrl}}/v1/audio/speech
@@ -89,7 +89,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/chinese-voice.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/chinese-voice.wav
 
 ### =========================================
 ### CUSTOM VOICES WITH SYSTEM PROMPTS
@@ -107,7 +107,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/-dramatic-hamlet.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/-dramatic-hamlet.wav
 
 ### Epic Narrator - Movie Trailer Style
 POST {{baseUrl}}/v1/audio/speech
@@ -120,7 +120,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/-epic-trailer.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/-epic-trailer.wav
 
 ### Excited Announcer
 POST {{baseUrl}}/v1/audio/speech
@@ -133,7 +133,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/-excited-announcer.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/-excited-announcer.wav
 
 ### Creepy Whisper - Horror
 POST {{baseUrl}}/v1/audio/speech
@@ -146,7 +146,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/-creepy-whisper.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/-creepy-whisper.wav
 
 ### Compassionate Woman
 POST {{baseUrl}}/v1/audio/speech
@@ -159,7 +159,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/-compassionate.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/-compassionate.wav
 
 ### Stern Commander
 POST {{baseUrl}}/v1/audio/speech
@@ -172,7 +172,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/-commander.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/-commander.wav
 
 ### Calm Narrator - Audiobook Style
 POST {{baseUrl}}/v1/audio/speech
@@ -185,7 +185,7 @@ Content-Type: application/json
   "response_format": "wav"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/-audiobook.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/-audiobook.wav
 
 ### =========================================
 ### DYNAMIC SYSTEM PROMPTS (Runtime)
@@ -204,7 +204,7 @@ Content-Type: application/json
   "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA deeply sad and melancholic delivery. The speaker is reflecting on loss with a heavy heart. Voice should crack slightly with emotion, slow pace, long pauses between phrases.\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/dynamic-sad.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/dynamic-sad.wav
 
 ### Dynamic Emotional - Excited/Happy
 POST {{baseUrl}}/v1/audio/speech
@@ -218,7 +218,7 @@ Content-Type: application/json
   "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nPure joy and excitement. The speaker just received amazing news. Voice is bright, energetic, with natural laughter bubbling through. Fast pace, rising intonation.\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/dynamic-excited.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/dynamic-excited.wav
 
 ### Dynamic Emotional - Angry/Confrontational
 POST {{baseUrl}}/v1/audio/speech
@@ -232,7 +232,7 @@ Content-Type: application/json
   "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nControlled anger building to confrontation. The speaker is holding back rage but it seeps through. Tense, clipped words, rising intensity, menacing undertone.\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/dynamic-angry.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/dynamic-angry.wav
 
 ### Dynamic Emotional - Scared/Terrified
 POST {{baseUrl}}/v1/audio/speech
@@ -246,7 +246,7 @@ Content-Type: application/json
   "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nGenuine terror and fear. The speaker is trying to stay quiet but panic is setting in. Whispered, shaky voice, quick shallow breaths, trembling words.\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/dynamic-scared.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/dynamic-scared.wav
 
 ### =========================================
 ### CUSTOM VOICE (voice_id + voice_url)
@@ -267,7 +267,7 @@ Content-Type: application/json
   "reference_text": "This is what the speaker says in the reference audio."
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-voice.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/custom-voice.wav
 
 ### =========================================
 ### CUSTOM VOICE + SYSTEM PROMPT (COMBINED)
@@ -288,7 +288,7 @@ Content-Type: application/json
   "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA theatrical, dramatic performance. Slow, deliberate pacing with emotional weight on each word.\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-dramatic.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/custom-dramatic.wav
 
 ### Custom Voice + Whispered Style
 POST {{baseUrl}}/v1/audio/speech
@@ -305,7 +305,7 @@ Content-Type: application/json
   "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA soft, intimate whisper. Very quiet, close to the microphone, breathy quality.\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-whisper.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/custom-whisper.wav
 
 ### Custom Voice + Angry Style
 POST {{baseUrl}}/v1/audio/speech
@@ -322,4 +322,4 @@ Content-Type: application/json
   "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nControlled anger, frustration building. Sharp consonants, tense delivery, rising intensity.\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/vllm2/custom-angry.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/custom-angry.wav

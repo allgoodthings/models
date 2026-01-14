@@ -2,49 +2,81 @@
 ### Use with VS Code REST Client extension
 ### Testing: system_prompt + voice cloning together
 
-# RunPod/Vast.ai proxy URL (change as needed)
-@baseUrl = http://localhost:8000
+@baseUrl = https://d9f1l8ohnlzc2a-8000.proxy.runpod.net
 
 ### Health Check
 GET {{baseUrl}}/health
 
 ### =========================================
-### TEST 1: System Prompt ONLY (no voice cloning)
-### This should work - emotional expression via scene description
+### TEST 1: Voice Characteristics (no voice cloning)
+### Scene descriptions control voice attributes, not emotions
 ### =========================================
 
-### Sad/Melancholic - No voice cloning
-POST {{baseUrl}}/generate
-Content-Type: application/json
-
-{
-  "text": "I never thought it would end this way. After all these years, all we've been through together.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA deeply sad and melancholic delivery. The speaker is reflecting on loss with a heavy heart. Voice should crack slightly with emotion, slow pace, long pauses between phrases.\n<|scene_desc_end|>"
-}
-
->> /Users/biz/Desktop/higgs-audio-tests/native/test1-sad-no-clone.wav
-
-### Angry - No voice cloning
-POST {{baseUrl}}/generate
-Content-Type: application/json
-
-{
-  "text": "You think you can just walk in here and take everything? I don't think so. Not today.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nControlled anger building to confrontation. The speaker is holding back rage but it seeps through. Tense, clipped words, rising intensity, menacing undertone.\n<|scene_desc_end|>"
-}
-
->> /Users/biz/Desktop/higgs-audio-tests/native/test1-angry-no-clone.wav
-
-### Scared - No voice cloning
+### Scared - whispered, trembling, breathy
 POST {{baseUrl}}/generate
 Content-Type: application/json
 
 {
   "text": "Something's in the house. I can hear it moving. Please, someone help me.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nGenuine terror and fear. The speaker is trying to stay quiet but panic is setting in. Whispered, shaky voice, quick shallow breaths, trembling words.\n<|scene_desc_end|>"
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: whispered;breathy;trembling;slow pace;feminine\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/native/test1-scared-no-clone.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-scared-whispered.wav
+
+### Angry - loud, fast, aggressive
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "You think you can just walk in here and take everything? I don't think so. Not today.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: loud;aggressive;fast pace;masculine;deep pitch\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-angry-loud.wav
+
+### Sad - slow, soft, monotone
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "I never thought it would end this way. After all these years, all we've been through together.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: soft;slow pace;low pitch;monotone;breathy;masculine\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-sad-soft.wav
+
+### Excited - fast, high energy, bright
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Oh my god, I can't believe it! We actually did it! This is the best day of my life!",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: energetic;fast pace;high pitch;bright;expressive;feminine\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-excited-energetic.wav
+
+### Calm narrator - measured, clear
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Chapter one. The morning sun rose over the quiet village, casting long shadows across the cobblestone streets.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: calm;measured pace;moderate pitch;clear;articulate;masculine;mature\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-narrator-calm.wav
+
+### Creepy whisper - slow, hushed
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Did you hear that? It's coming from inside the walls. They've been watching us this whole time.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: whispered;hushed;slow pace;low pitch;breathy;masculine\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test1-creepy-whisper.wav
 
 ### =========================================
 ### TEST 2: Voice Cloning ONLY (no system prompt)
@@ -65,37 +97,9 @@ Content-Type: application/json
 >> /Users/biz/Desktop/higgs-audio-tests/native/test2-clone-no-prompt.wav
 
 ### =========================================
-### TEST 3: System Prompt + Voice Cloning TOGETHER
-### THE CRITICAL TEST - does this work in native implementation?
+### TEST 3: Voice Characteristics + Voice Cloning TOGETHER
+### THE CRITICAL TEST - can we control cloned voice attributes?
 ### =========================================
-
-### Sad + Voice Clone
-POST {{baseUrl}}/generate
-Content-Type: application/json
-
-{
-  "text": "I never thought it would end this way. After all these years, all we've been through together.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nA deeply sad and melancholic delivery. The speaker is reflecting on loss with a heavy heart. Voice should crack slightly with emotion, slow pace, long pauses between phrases.\n<|scene_desc_end|>",
-  "voice_id": "test-voice-1",
-  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
-  "reference_text": "This is what the speaker says in the reference audio."
-}
-
->> /Users/biz/Desktop/higgs-audio-tests/native/test3-sad-WITH-clone.wav
-
-### Angry + Voice Clone
-POST {{baseUrl}}/generate
-Content-Type: application/json
-
-{
-  "text": "You think you can just walk in here and take everything? I don't think so. Not today.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nControlled anger building to confrontation. The speaker is holding back rage but it seeps through. Tense, clipped words, rising intensity, menacing undertone.\n<|scene_desc_end|>",
-  "voice_id": "test-voice-1",
-  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
-  "reference_text": "This is what the speaker says in the reference audio."
-}
-
->> /Users/biz/Desktop/higgs-audio-tests/native/test3-angry-WITH-clone.wav
 
 ### Scared + Voice Clone
 POST {{baseUrl}}/generate
@@ -103,7 +107,7 @@ Content-Type: application/json
 
 {
   "text": "Something's in the house. I can hear it moving. Please, someone help me.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nGenuine terror and fear. The speaker is trying to stay quiet but panic is setting in. Whispered, shaky voice, quick shallow breaths, trembling words.\n<|scene_desc_end|>",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: whispered;breathy;trembling;slow pace\n<|scene_desc_end|>",
   "voice_id": "test-voice-1",
   "voice_url": "https://your-cdn.com/voices/test-voice.wav",
   "reference_text": "This is what the speaker says in the reference audio."
@@ -111,13 +115,27 @@ Content-Type: application/json
 
 >> /Users/biz/Desktop/higgs-audio-tests/native/test3-scared-WITH-clone.wav
 
+### Angry + Voice Clone
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "You think you can just walk in here and take everything? I don't think so. Not today.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: loud;aggressive;fast pace;deep pitch\n<|scene_desc_end|>",
+  "voice_id": "test-voice-1",
+  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
+  "reference_text": "This is what the speaker says in the reference audio."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test3-angry-WITH-clone.wav
+
 ### Excited + Voice Clone
 POST {{baseUrl}}/generate
 Content-Type: application/json
 
 {
   "text": "Oh my god, I can't believe it! We actually did it! This is the best day of my life!",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nPure joy and excitement. The speaker just received amazing news. Voice is bright, energetic, with natural laughter bubbling through. Fast pace, rising intonation.\n<|scene_desc_end|>",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: energetic;fast pace;high pitch;bright;expressive\n<|scene_desc_end|>",
   "voice_id": "test-voice-1",
   "voice_url": "https://your-cdn.com/voices/test-voice.wav",
   "reference_text": "This is what the speaker says in the reference audio."
@@ -126,61 +144,75 @@ Content-Type: application/json
 >> /Users/biz/Desktop/higgs-audio-tests/native/test3-excited-WITH-clone.wav
 
 ### =========================================
-### TEST 4: Comparison - Same text, same voice, different emotions
-### If system_prompt works with cloning, these should sound different
+### TEST 4: Same text, different voice characteristics
+### Compare: neutral vs whispered vs loud vs slow
 ### =========================================
 
-### Neutral baseline
+### Baseline - neutral/default
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "The package has arrived at the front door."
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-baseline.wav
+
+### Same text - whispered
 POST {{baseUrl}}/generate
 Content-Type: application/json
 
 {
   "text": "The package has arrived at the front door.",
-  "voice_id": "test-voice-1",
-  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
-  "reference_text": "Reference audio transcript."
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: whispered;hushed;slow pace\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/native/test4-neutral.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-whispered.wav
 
-### Same text - Happy
+### Same text - loud/urgent
 POST {{baseUrl}}/generate
 Content-Type: application/json
 
 {
   "text": "The package has arrived at the front door.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nExcited and happy. The speaker is delighted about the delivery. Bright, upbeat tone.\n<|scene_desc_end|>",
-  "voice_id": "test-voice-1",
-  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
-  "reference_text": "Reference audio transcript."
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: loud;urgent;fast pace;high pitch\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/native/test4-happy.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-loud.wav
 
-### Same text - Suspicious
+### Same text - slow/monotone
 POST {{baseUrl}}/generate
 Content-Type: application/json
 
 {
   "text": "The package has arrived at the front door.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSuspicious and wary. The speaker wasn't expecting any package. Slow, questioning tone with an undertone of concern.\n<|scene_desc_end|>",
-  "voice_id": "test-voice-1",
-  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
-  "reference_text": "Reference audio transcript."
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: monotone;slow pace;low pitch;deep\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/native/test4-suspicious.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/test4-slow.wav
 
-### Same text - Terrified
+### =========================================
+### TEST 5: British accent example (from official docs)
+### =========================================
+
+### British accent
 POST {{baseUrl}}/generate
 Content-Type: application/json
 
 {
-  "text": "The package has arrived at the front door.",
-  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nTerrified. The speaker knows something dangerous is in that package. Trembling, whispered, barely able to get the words out.\n<|scene_desc_end|>",
-  "voice_id": "test-voice-1",
-  "voice_url": "https://your-cdn.com/voices/test-voice.wav",
-  "reference_text": "Reference audio transcript."
+  "text": "Hey, everyone! Welcome back to Tech Talk Tuesdays. It's your host, Alex, and today, we're diving into a topic that's become absolutely crucial in the tech world.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: british accent;conversational;moderate pace;clear\n<|scene_desc_end|>"
 }
 
->> /Users/biz/Desktop/higgs-audio-tests/native/test4-terrified.wav
+>> /Users/biz/Desktop/higgs-audio-tests/native/test5-british.wav
+
+### American accent for comparison
+POST {{baseUrl}}/generate
+Content-Type: application/json
+
+{
+  "text": "Hey, everyone! Welcome back to Tech Talk Tuesdays. It's your host, Alex, and today, we're diving into a topic that's become absolutely crucial in the tech world.",
+  "system_prompt": "Generate audio following instruction.\n\n<|scene_desc_start|>\nSPEAKER0: american accent;conversational;moderate pace;clear\n<|scene_desc_end|>"
+}
+
+>> /Users/biz/Desktop/higgs-audio-tests/native/test5-american.wav
