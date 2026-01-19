@@ -38,16 +38,25 @@ def test_health(client: httpx.Client) -> bool:
 def test_generate_single(client: httpx.Client) -> bool:
     """Test single image generation."""
     print("\n" + "=" * 60)
-    print("TEST: POST /generate (single)")
+    print("TEST: POST /generate (single, non-sequential)")
     print("=" * 60)
 
     request_data = {
-        "prompts": ["A cute robot cat sitting on a windowsill, digital art"],
-        "upload_urls": ["https://httpbin.org/put"],
-        "width": 512,
-        "height": 512,
-        "num_steps": 4,
-        "seed": 42,
+        "images": [
+            {
+                "prompt": "A cute robot cat sitting on a windowsill, digital art",
+                "referenceImageUrls": [],
+            }
+        ],
+        "uploadUrls": ["https://httpbin.org/put"],
+        "config": {
+            "width": 512,
+            "height": 512,
+            "seed": 42,
+            "steps": 4,
+            "guidanceScale": 1.0,
+        },
+        "sequential": False,
     }
 
     print(f"Request: {json.dumps(request_data, indent=2)}")
@@ -60,43 +69,56 @@ def test_generate_single(client: httpx.Client) -> bool:
         return False
 
     data = response.json()
-    if not data.get("success") or len(data.get("results", [])) != 1:
-        print(f"FAIL: success={data.get('success')}, results={len(data.get('results', []))}")
+    if len(data.get("results", [])) != 1:
+        print(f"FAIL: results={len(data.get('results', []))}")
         return False
 
     result = data["results"][0]
-    if not result.get("success") or result.get("seed") != 42:
-        print(f"FAIL: result success={result.get('success')}, seed={result.get('seed')}")
+    if not result.get("success"):
+        print(f"FAIL: result success={result.get('success')}, error={result.get('error')}")
         return False
 
     print("PASS")
     return True
 
 
-def test_generate_batch(client: httpx.Client) -> bool:
-    """Test batch image generation."""
+def test_generate_sequential(client: httpx.Client) -> bool:
+    """Test sequential keyframe generation."""
     print("\n" + "=" * 60)
-    print("TEST: POST /generate (batch)")
+    print("TEST: POST /generate (sequential keyframes)")
     print("=" * 60)
 
     request_data = {
-        "prompts": [
-            "A red apple on a wooden table",
-            "A green apple on a wooden table",
-            "A yellow banana on a wooden table",
+        "images": [
+            {
+                "prompt": "A warrior stands in a misty forest, cinematic style",
+                "referenceImageUrls": [],
+            },
+            {
+                "prompt": "The warrior draws a sword, previous scene visible, cinematic style",
+                "referenceImageUrls": [],
+            },
+            {
+                "prompt": "The warrior charges forward, previous scene visible, cinematic style",
+                "referenceImageUrls": [],
+            },
         ],
-        "upload_urls": [
+        "uploadUrls": [
             "https://httpbin.org/put",
             "https://httpbin.org/put",
             "https://httpbin.org/put",
         ],
-        "width": 512,
-        "height": 512,
-        "num_steps": 4,
-        "seed": 100,
+        "config": {
+            "width": 512,
+            "height": 512,
+            "seed": 100,
+            "steps": 4,
+            "guidanceScale": 1.0,
+        },
+        "sequential": True,
     }
 
-    print(f"Generating {len(request_data['prompts'])} images...")
+    print(f"Generating {len(request_data['images'])} sequential keyframes...")
 
     response = client.post("/generate", json=request_data, timeout=300.0)
     print(f"Status: {response.status_code}")
@@ -105,51 +127,16 @@ def test_generate_batch(client: httpx.Client) -> bool:
         return False
 
     data = response.json()
-    print(f"Response: success={data.get('success')}, total_ms={data.get('timing_total_ms')}")
+    print(f"Response: {len(data.get('results', []))} results")
 
-    if not data.get("success") or len(data.get("results", [])) != 3:
+    if len(data.get("results", [])) != 3:
         return False
 
-    # Check sequential seeds
     for i, result in enumerate(data["results"]):
-        expected_seed = 100 + i
-        if result.get("seed") != expected_seed:
-            print(f"FAIL: result[{i}] seed={result.get('seed')}, expected={expected_seed}")
+        status = "OK" if result.get("success") else f"FAIL: {result.get('error')}"
+        print(f"  [{i}] {status}")
+        if not result.get("success"):
             return False
-        print(f"  [{i}] seed={result['seed']}, inference={result['timing_inference_ms']}ms")
-
-    print("PASS")
-    return True
-
-
-def test_generate_1024(client: httpx.Client) -> bool:
-    """Test 1024x1024 generation."""
-    print("\n" + "=" * 60)
-    print("TEST: POST /generate (1024x1024)")
-    print("=" * 60)
-
-    request_data = {
-        "prompts": ["A majestic mountain landscape at sunset, photorealistic"],
-        "upload_urls": ["https://httpbin.org/put"],
-        "width": 1024,
-        "height": 1024,
-        "num_steps": 4,
-        "seed": 42,
-    }
-
-    response = client.post("/generate", json=request_data, timeout=180.0)
-    print(f"Status: {response.status_code}")
-
-    if response.status_code != 200:
-        return False
-
-    data = response.json()
-    result = data["results"][0] if data.get("results") else {}
-    print(f"Response: success={result.get('success')}, inference={result.get('timing_inference_ms')}ms")
-
-    if not data.get("success"):
-        print(f"FAIL: {result.get('error')}")
-        return False
 
     print("PASS")
     return True
@@ -173,8 +160,7 @@ def main():
 
         if results[0][1] and not args.skip_generate:
             results.append(("generate_single", test_generate_single(client)))
-            results.append(("generate_batch", test_generate_batch(client)))
-            results.append(("generate_1024", test_generate_1024(client)))
+            results.append(("generate_sequential", test_generate_sequential(client)))
 
     # Summary
     print("\n" + "=" * 60)

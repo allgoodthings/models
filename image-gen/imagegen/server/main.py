@@ -19,10 +19,11 @@ from PIL import Image
 
 from .flux_pipeline import FluxConfig, FluxPipeline, get_content_type, image_to_bytes
 from .schemas import (
-    GenerateRequest,
-    GenerateResponse,
-    GenerateResult,
+    BatchImageRequest,
+    BatchImageResponse,
     HealthResponse,
+    ImageResult,
+    ImageSpec,
     UpscaleRequest,
     UpscaleResponse,
 )
@@ -57,23 +58,20 @@ async def download_image(url: str) -> Image.Image:
         return image
 
 
-async def upload_image(url: str, image_bytes: bytes, content_type: str) -> int:
-    """Upload image to presigned URL. Returns time in ms."""
-    start = time.time()
+async def upload_image(url: str, image_bytes: bytes, content_type: str) -> None:
+    """Upload image to presigned URL."""
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.put(url, content=image_bytes, headers={"Content-Type": content_type})
         response.raise_for_status()
-    return int((time.time() - start) * 1000)
 
 
-def upscale_image(image: Image.Image, scale: int) -> Tuple[Image.Image, int]:
-    """Upscale image. Returns (image, time_ms)."""
-    start = time.time()
-    upscaler = Upscaler(UpscalerConfig())
-    upscaler.load()
-    result = upscaler.upscale(image, scale=scale)
-    upscaler.unload()
-    return result, int((time.time() - start) * 1000)
+async def download_references(urls: List[str]) -> List[Tuple[Image.Image, float]]:
+    """Download reference images from URLs."""
+    refs = []
+    for url in urls:
+        img = await download_image(url)
+        refs.append((img, 1.0))
+    return refs
 
 
 def get_base_seed(seed: Optional[int]) -> int:
@@ -81,11 +79,6 @@ def get_base_seed(seed: Optional[int]) -> int:
     if seed is not None:
         return seed
     return torch.randint(0, 2**32 - 1, (1,)).item()
-
-
-def extract_base_url(presigned_url: str) -> str:
-    """Extract base URL without query params."""
-    return presigned_url.split("?")[0]
 
 
 # =============================================================================
@@ -136,7 +129,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Image-Gen API",
     description="FLUX.2 klein batch image generation",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -170,127 +163,102 @@ async def health():
     )
 
 
-@app.post("/generate", response_model=GenerateResponse)
-async def generate(request: GenerateRequest):
-    """Generate images from prompts with optional reference images."""
+@app.post("/generate", response_model=BatchImageResponse)
+async def generate(request: BatchImageRequest):
+    """Generate batch of images."""
     if pipeline is None or not pipeline.is_loaded:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    total_start = time.time()
     logger.info("=" * 60)
-    logger.info(f"GENERATE: {len(request.prompts)} images, {len(request.images)} refs")
+    logger.info(f"GENERATE: {len(request.images)} images, sequential={request.sequential}")
     logger.info("=" * 60)
 
-    # Download reference images if provided
-    ref_images = await download_references(request.images) if request.images else None
+    base_seed = get_base_seed(request.config.seed)
+    results: List[ImageResult] = []
+    prev_output: Optional[Image.Image] = None
 
-    # Generate each image
-    base_seed = get_base_seed(request.seed)
-    results = []
-
-    for i, (prompt, upload_url) in enumerate(zip(request.prompts, request.upload_urls)):
+    for i, (spec, upload_url) in enumerate(zip(request.images, request.uploadUrls)):
         result = await generate_single(
             index=i,
-            prompt=prompt,
+            spec=spec,
             upload_url=upload_url,
-            ref_images=ref_images,
-            width=request.width,
-            height=request.height,
-            num_steps=request.num_steps,
-            guidance_scale=request.guidance_scale,
+            config=request.config,
             seed=base_seed + i,
-            upscale=request.upscale,
-            output_format=request.output_format,
+            prev_output=prev_output if request.sequential else None,
         )
         results.append(result)
 
-    total_ms = int((time.time() - total_start) * 1000)
-    all_success = all(r.success for r in results)
+        # Store output for next iteration in sequential mode
+        if request.sequential and result.success and hasattr(result, "_output_image"):
+            prev_output = result._output_image
 
-    logger.info(f"Complete: {sum(r.success for r in results)}/{len(results)} in {total_ms}ms")
-
-    return GenerateResponse(success=all_success, results=results, timing_total_ms=total_ms)
-
-
-async def download_references(images: List) -> List[Tuple[Image.Image, float]]:
-    """Download all reference images."""
-    logger.info(f"Downloading {len(images)} reference images...")
-    start = time.time()
-    refs = []
-    for ref in images:
-        img = await download_image(ref.url)
-        refs.append((img, ref.weight))
-    logger.info(f"Downloaded in {int((time.time() - start) * 1000)}ms")
-    return refs
+    logger.info(f"Complete: {sum(r.success for r in results)}/{len(results)}")
+    return BatchImageResponse(results=results)
 
 
 async def generate_single(
     index: int,
-    prompt: str,
+    spec: ImageSpec,
     upload_url: str,
-    ref_images: Optional[List[Tuple[Image.Image, float]]],
-    width: int,
-    height: int,
-    num_steps: int,
-    guidance_scale: float,
+    config,
     seed: int,
-    upscale: Optional[int],
-    output_format: str,
-) -> GenerateResult:
+    prev_output: Optional[Image.Image],
+) -> ImageResult:
     """Generate a single image."""
-    logger.info(f"[{index}] {prompt[:50]}...")
+    logger.info(f"[{index}] {spec.prompt[:60]}...")
 
     try:
+        # Build reference images list
+        ref_images: List[Tuple[Image.Image, float]] = []
+
+        # In sequential mode, prepend previous output as first reference
+        if prev_output is not None:
+            ref_images.append((prev_output, 1.0))
+
+        # Download reference images from URLs
+        if spec.referenceImageUrls:
+            logger.info(f"[{index}] Downloading {len(spec.referenceImageUrls)} refs...")
+            downloaded = await download_references(spec.referenceImageUrls)
+            ref_images.extend(downloaded)
+
         # Generate
-        inference_start = time.time()
+        start = time.time()
         if ref_images:
-            image, used_seed = pipeline.edit(
-                prompt=prompt,
+            image, _ = pipeline.edit(
+                prompt=spec.prompt,
                 reference_images=ref_images,
-                width=width,
-                height=height,
-                num_steps=num_steps,
-                guidance_scale=guidance_scale,
+                width=config.width,
+                height=config.height,
+                num_steps=config.steps,
+                guidance_scale=config.guidanceScale,
                 seed=seed,
             )
         else:
-            image, used_seed = pipeline.generate(
-                prompt=prompt,
-                width=width,
-                height=height,
-                num_steps=num_steps,
-                guidance_scale=guidance_scale,
+            image, _ = pipeline.generate(
+                prompt=spec.prompt,
+                width=config.width,
+                height=config.height,
+                num_steps=config.steps,
+                guidance_scale=config.guidanceScale,
                 seed=seed,
             )
-        inference_ms = int((time.time() - inference_start) * 1000)
-
-        # Upscale if requested
-        upscale_ms = None
-        if upscale:
-            image, upscale_ms = upscale_image(image, upscale)
+        gen_ms = int((time.time() - start) * 1000)
 
         # Upload
-        image_bytes = image_to_bytes(image, output_format)
-        content_type = get_content_type(output_format)
-        upload_ms = await upload_image(upload_url, image_bytes, content_type)
+        image_bytes = image_to_bytes(image, "png")
+        content_type = get_content_type("png")
+        await upload_image(upload_url, image_bytes, content_type)
 
-        logger.info(f"[{index}] Done: {inference_ms}ms gen, {upscale_ms or 0}ms up, {upload_ms}ms upload")
+        logger.info(f"[{index}] Done: {gen_ms}ms")
 
-        return GenerateResult(
-            index=index,
-            success=True,
-            output_url=extract_base_url(upload_url),
-            width=image.size[0],
-            height=image.size[1],
-            seed=used_seed,
-            timing_inference_ms=inference_ms,
-            timing_upscale_ms=upscale_ms,
-            timing_upload_ms=upload_ms,
-        )
+        # Create result and attach output image for sequential mode
+        result = ImageResult(index=index, success=True)
+        result._output_image = image  # Attach for sequential chaining
+        return result
 
     except Exception as e:
         logger.error(f"[{index}] Failed: {e}")
-        return GenerateResult(index=index, success=False, error=str(e))
+        return ImageResult(index=index, success=False, error=str(e))
 
 
 @app.post("/upscale", response_model=UpscaleResponse)
@@ -321,9 +289,14 @@ async def upscale_endpoint(request: UpscaleRequest):
         upscaler.unload()
 
         # Upload
+        def extract_base_url(url: str) -> str:
+            return url.split("?")[0]
+
         image_bytes = image_to_bytes(upscaled, request.output_format)
         content_type = get_content_type(request.output_format)
-        upload_ms = await upload_image(request.upload_url, image_bytes, content_type)
+        upload_start = time.time()
+        await upload_image(request.upload_url, image_bytes, content_type)
+        upload_ms = int((time.time() - upload_start) * 1000)
 
         total_ms = int((time.time() - total_start) * 1000)
 
@@ -352,9 +325,9 @@ async def root():
     """API info."""
     return {
         "name": "Image-Gen API",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "endpoints": [
-            "POST /generate - Batch image generation with optional references",
+            "POST /generate - Batch image generation",
             "POST /upscale - Image upscaling (2x/4x)",
             "GET /health - Health check",
         ],

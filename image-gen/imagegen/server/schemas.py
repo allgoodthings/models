@@ -22,59 +22,54 @@ class HealthResponse(BaseModel):
 
 
 # =============================================================================
-# Image Generation (Batch)
+# Batch Image Generation
 # =============================================================================
 
 
-class ReferenceImage(BaseModel):
-    """Reference image for guided generation."""
+class ImageSpec(BaseModel):
+    """Specification for a single image to generate."""
 
-    url: str
-    weight: float = Field(1.0, ge=0.0, le=2.0)
+    prompt: str
+    referenceImageUrls: List[str] = Field(default_factory=list)
 
 
-class GenerateRequest(BaseModel):
-    """Batch image generation request."""
+class GenerationConfig(BaseModel):
+    """Configuration for image generation."""
 
-    prompts: List[str] = Field(..., min_length=1, max_length=20)
-    upload_urls: List[str] = Field(..., min_length=1, max_length=20)
-    images: List[ReferenceImage] = Field(default_factory=list, max_length=16)
     width: int = Field(1024, ge=256, le=2048)
     height: int = Field(1024, ge=256, le=2048)
-    num_steps: int = Field(4, ge=1, le=50)
-    guidance_scale: float = Field(1.0, ge=0.0, le=20.0)
     seed: Optional[int] = None
-    upscale: Optional[Literal[2, 4]] = None
-    output_format: Literal["png", "jpeg", "webp"] = "png"
+    steps: int = Field(4, ge=1, le=50)
+    guidanceScale: float = Field(1.0, ge=0.0, le=20.0)
+
+
+class BatchImageRequest(BaseModel):
+    """Batch image generation request."""
+
+    images: List[ImageSpec] = Field(..., min_length=1, max_length=20)
+    uploadUrls: List[str] = Field(..., min_length=1, max_length=20)
+    config: GenerationConfig
+    sequential: bool = False
 
     @model_validator(mode="after")
     def validate_lengths(self):
-        if len(self.prompts) != len(self.upload_urls):
-            raise ValueError("prompts and upload_urls must have same length")
+        if len(self.images) != len(self.uploadUrls):
+            raise ValueError("images and uploadUrls must have same length")
         return self
 
 
-class GenerateResult(BaseModel):
+class ImageResult(BaseModel):
     """Result for a single generated image."""
 
     index: int
     success: bool
     error: Optional[str] = None
-    output_url: Optional[str] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
-    seed: Optional[int] = None
-    timing_inference_ms: Optional[int] = None
-    timing_upscale_ms: Optional[int] = None
-    timing_upload_ms: Optional[int] = None
 
 
-class GenerateResponse(BaseModel):
+class BatchImageResponse(BaseModel):
     """Batch image generation response."""
 
-    success: bool
-    results: List[GenerateResult]
-    timing_total_ms: int
+    results: List[ImageResult]
 
 
 # =============================================================================

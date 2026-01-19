@@ -10,8 +10,12 @@
 # Models:
 #   - FLUX.2-klein-4B (default, 24GB GPUs) - set MODEL_ID=4B
 #   - FLUX.2-klein-9B (32GB+ GPUs) - set MODEL_ID=9B
+#
+# GPU Support:
+#   - Uses PyTorch nightly for Blackwell (sm_120) support
+#   - Compatible with RTX 4090, A100, H100, RTX PRO 4000 Blackwell, etc.
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -38,11 +42,10 @@ ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
-# Install PyTorch with CUDA 12.4
+# Install PyTorch nightly with CUDA 12.6 (supports Blackwell sm_120)
 RUN uv pip install --system --no-cache \
-    torch==2.5.1 \
-    torchvision==0.20.1 \
-    --index-url https://download.pytorch.org/whl/cu124
+    --pre torch torchvision \
+    --index-url https://download.pytorch.org/whl/nightly/cu126
 
 # Install diffusers from git (needed for Flux2KleinPipeline)
 RUN uv pip install --system --no-cache \
@@ -54,8 +57,8 @@ RUN uv pip install --system --no-cache \
     protobuf>=4.0.0 \
     "huggingface-hub>=0.23.0,<1.0"
 
-# Install TorchAO for FP8 quantization (optional, for 9B model on 24GB)
-RUN uv pip install --system --no-cache torchao>=0.8.0
+# Install TorchAO nightly for FP8 quantization (optional, for 9B model on 24GB)
+RUN uv pip install --system --no-cache --pre torchao --index-url https://download.pytorch.org/whl/nightly/cu126
 
 # Install Real-ESRGAN and dependencies
 RUN uv pip install --system --no-cache \
