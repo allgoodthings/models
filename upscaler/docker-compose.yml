@@ -1,0 +1,31 @@
+services:
+  upscaler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SKIP_MODEL_DOWNLOAD: "false"
+        INCLUDE_DEFLICKER: "false"
+    ports:
+      - "8000:8000"
+    environment:
+      - PRELOAD_MODELS=${PRELOAD_MODELS:-true}
+      - CUDA_VISIBLE_DEVICES=0
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # Mount models for faster iteration during development
+      - ./models:/app/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped

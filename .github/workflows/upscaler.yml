@@ -1,0 +1,198 @@
+name: Video Upscaler CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'upscaler/**'
+      - '.github/workflows/upscaler.yml'
+    tags: ['upscaler-*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'upscaler/**'
+      - '.github/workflows/upscaler.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/video-upscaler
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ==========================================================================
+  # Unit Tests
+  # ==========================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pydantic
+
+      - name: Run unit tests
+        working-directory: upscaler
+        run: |
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+          pytest tests/test_schemas.py tests/test_video.py -v --tb=short
+
+  # ==========================================================================
+  # Lint
+  # ==========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install linters
+        run: |
+          pip install ruff black
+
+      - name: Run ruff
+        working-directory: upscaler
+        run: |
+          ruff check upscaler/ tests/ || echo "Lint issues found (non-blocking)"
+
+      - name: Run black (check only)
+        working-directory: upscaler
+        run: |
+          black --check upscaler/ tests/ || echo "Formatting issues found (non-blocking)"
+
+  # ==========================================================================
+  # Docker Build
+  # ==========================================================================
+  build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [unit-tests, lint]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker system prune --all --force --volumes
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=match,pattern=upscaler-(.*),group=1
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./upscaler
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            SKIP_MODEL_DOWNLOAD=true
+
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: echo "Image pushed with tags ${{ steps.meta.outputs.tags }}"
+
+  # ==========================================================================
+  # Docker Smoke Test (PR only)
+  # ==========================================================================
+  docker-smoke-test:
+    name: Docker Smoke Test
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 15
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo docker system prune --all --force --volumes
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./upscaler
+          push: false
+          load: true
+          tags: video-upscaler:test
+          cache-from: type=gha
+          build-args: |
+            SKIP_MODEL_DOWNLOAD=true
+
+      - name: Test image starts
+        run: |
+          # Start container without GPU, skip model loading for smoke test
+          docker run -d --name upscaler-test -p 8000:8000 \
+            -e PRELOAD_MODELS=false \
+            video-upscaler:test
+
+          # Wait for server to start
+          sleep 15
+
+          # Check health endpoint
+          curl -s http://localhost:8000/health | grep -q "status" || (docker logs upscaler-test && exit 1)
+
+          # Check root endpoint
+          curl -f http://localhost:8000/ || (docker logs upscaler-test && exit 1)
+
+          # Cleanup
+          docker stop upscaler-test
+          docker rm upscaler-test
