@@ -39,7 +39,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pydantic
+          pip install pytest pydantic opencv-python-headless numpy
 
       - name: Run unit tests
         working-directory: upscaler
