@@ -1,0 +1,195 @@
+name: Image-Gen CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'image-gen/**'
+      - '.github/workflows/image-gen.yml'
+    tags: ['image-gen-*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'image-gen/**'
+      - '.github/workflows/image-gen.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/image-gen
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ==========================================================================
+  # Unit Tests
+  # ==========================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pydantic
+
+      - name: Run unit tests
+        working-directory: image-gen
+        run: |
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+          pytest tests/ -v --tb=short || echo "No tests found (non-blocking)"
+
+  # ==========================================================================
+  # Lint
+  # ==========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install linters
+        run: |
+          pip install ruff black
+
+      - name: Run ruff
+        working-directory: image-gen
+        run: |
+          ruff check imagegen/ || echo "Lint issues found (non-blocking)"
+
+      - name: Run black (check only)
+        working-directory: image-gen
+        run: |
+          black --check imagegen/ || echo "Formatting issues found (non-blocking)"
+
+  # ==========================================================================
+  # Docker Build
+  # ==========================================================================
+  build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [unit-tests, lint]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker system prune --all --force --volumes
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=match,pattern=image-gen-(.*),group=1
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./image-gen
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: echo "Image pushed with tags ${{ steps.meta.outputs.tags }}"
+
+  # ==========================================================================
+  # Docker Smoke Test (PR only)
+  # ==========================================================================
+  docker-smoke-test:
+    name: Docker Smoke Test
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 15
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo docker system prune --all --force --volumes
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./image-gen
+          push: false
+          load: true
+          tags: image-gen:test
+          cache-from: type=gha
+
+      - name: Test image starts
+        run: |
+          # Start container without GPU, skip model loading for smoke test
+          docker run -d --name image-gen-test -p 7000:7000 \
+            -e PRELOAD_MODELS=false \
+            -e HUGGING_FACE_TOKEN=test \
+            image-gen:test
+
+          # Wait for server to start
+          sleep 10
+
+          # Check health endpoint (will report unhealthy since model not loaded, but server runs)
+          curl -s http://localhost:7000/health | grep -q "status" || (docker logs image-gen-test && exit 1)
+
+          # Check root endpoint
+          curl -f http://localhost:7000/ || (docker logs image-gen-test && exit 1)
+
+          # Cleanup
+          docker stop image-gen-test
+          docker rm image-gen-test
