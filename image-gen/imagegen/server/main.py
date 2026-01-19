@@ -78,6 +78,24 @@ async def upload_image(url: str, image_bytes: bytes, content_type: str) -> float
     return elapsed_ms
 
 
+def upscale_image_sync(image: Image.Image, scale: int) -> tuple[Image.Image, int]:
+    """Upscale image synchronously. Returns (upscaled_image, time_ms)."""
+    from .upscaler import Upscaler, UpscalerConfig
+
+    logger.info(f"  Upscaling {scale}x...")
+    start_time = time.time()
+
+    upscaler = Upscaler(UpscalerConfig())
+    upscaler.load()
+    upscaled = upscaler.upscale(image, scale=scale)
+    upscaler.unload()
+
+    elapsed_ms = int((time.time() - start_time) * 1000)
+    logger.info(f"  Upscaled to {upscaled.size[0]}x{upscaled.size[1]} in {elapsed_ms}ms")
+
+    return upscaled, elapsed_ms
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load model on startup, cleanup on shutdown."""
@@ -208,6 +226,13 @@ async def generate(request: GenerateRequest):
         inference_ms = int((time.time() - inference_start) * 1000)
         logger.info(f"  Generated in {inference_ms}ms, seed={seed}")
 
+        # Upscale if requested
+        upscale_ms = None
+        output_width, output_height = image.size
+        if request.upscale:
+            image, upscale_ms = upscale_image_sync(image, request.upscale)
+            output_width, output_height = image.size
+
         # Convert to bytes
         image_bytes = image_to_bytes(image, request.output_format)
         content_type = get_content_type(request.output_format)
@@ -221,10 +246,11 @@ async def generate(request: GenerateRequest):
         return GenerateResponse(
             success=True,
             output_url=request.upload_url.split("?")[0],
-            width=request.width,
-            height=request.height,
+            width=output_width,
+            height=output_height,
             seed=seed,
             timing_inference_ms=inference_ms,
+            timing_upscale_ms=upscale_ms,
             timing_upload_ms=upload_ms,
             timing_total_ms=total_ms,
         )
@@ -279,6 +305,13 @@ async def edit(request: EditRequest):
         inference_ms = int((time.time() - inference_start) * 1000)
         logger.info(f"  Generated in {inference_ms}ms, seed={seed}")
 
+        # Upscale if requested
+        upscale_ms = None
+        output_width, output_height = image.size
+        if request.upscale:
+            image, upscale_ms = upscale_image_sync(image, request.upscale)
+            output_width, output_height = image.size
+
         # Convert to bytes
         image_bytes = image_to_bytes(image, request.output_format)
         content_type = get_content_type(request.output_format)
@@ -293,11 +326,12 @@ async def edit(request: EditRequest):
             success=True,
             output_url=request.upload_url.split("?")[0],
             references_loaded=len(reference_data),
-            width=request.width,
-            height=request.height,
+            width=output_width,
+            height=output_height,
             seed=seed,
             timing_download_ms=download_ms,
             timing_inference_ms=inference_ms,
+            timing_upscale_ms=upscale_ms,
             timing_upload_ms=upload_ms,
             timing_total_ms=total_ms,
         )

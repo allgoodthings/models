@@ -211,7 +211,7 @@ Health check with model status and GPU info.
 
 ### POST /generate
 
-Generate image from text prompt.
+Generate image from text prompt with optional upscaling.
 
 ```json
 // Request
@@ -222,24 +222,26 @@ Generate image from text prompt.
   "height": 1024,
   "num_steps": 4,
   "seed": 42,
-  "output_format": "png"
+  "output_format": "png",
+  "upscale": 4  // Optional: 2 or 4 for 2x/4x upscaling
 }
 
 // Response
 {
   "success": true,
   "output_url": "https://s3.../output.png",
-  "width": 1024,
-  "height": 1024,
+  "width": 4096,
+  "height": 4096,
   "seed": 42,
   "timing_inference_ms": 2100,
-  "timing_total_ms": 2450
+  "timing_upscale_ms": 1500,
+  "timing_total_ms": 4100
 }
 ```
 
 ### POST /edit
 
-Edit image using reference images.
+Edit image using reference images with optional upscaling.
 
 ```json
 // Request
@@ -248,7 +250,21 @@ Edit image using reference images.
   "reference_images": [
     {"url": "https://...", "weight": 1.0}
   ],
-  "upload_url": "https://s3.../presigned-put-url"
+  "upload_url": "https://s3.../presigned-put-url",
+  "upscale": 4  // Optional: 2 or 4 for 2x/4x upscaling
+}
+
+// Response
+{
+  "success": true,
+  "output_url": "https://s3.../output.png",
+  "references_loaded": 1,
+  "width": 4096,
+  "height": 4096,
+  "timing_download_ms": 200,
+  "timing_inference_ms": 2300,
+  "timing_upscale_ms": 1500,
+  "timing_total_ms": 4200
 }
 ```
 

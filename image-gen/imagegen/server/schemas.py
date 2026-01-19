@@ -75,6 +75,10 @@ class GenerateRequest(BaseModel):
         "png",
         description="Output image format",
     )
+    upscale: Optional[Literal[2, 4]] = Field(
+        None,
+        description="Optional upscale factor (2x or 4x) to apply after generation",
+    )
 
 
 class GenerateResponse(BaseModel):
@@ -90,6 +94,9 @@ class GenerateResponse(BaseModel):
     seed: Optional[int] = Field(None, description="Seed used for generation")
     timing_inference_ms: Optional[int] = Field(
         None, description="Time for image generation"
+    )
+    timing_upscale_ms: Optional[int] = Field(
+        None, description="Time for upscaling (if requested)"
     )
     timing_upload_ms: Optional[int] = Field(None, description="Time to upload image")
     timing_total_ms: Optional[int] = Field(None, description="Total processing time")
@@ -163,6 +170,10 @@ class EditRequest(BaseModel):
         "png",
         description="Output image format",
     )
+    upscale: Optional[Literal[2, 4]] = Field(
+        None,
+        description="Optional upscale factor (2x or 4x) to apply after generation",
+    )
 
 
 class EditResponse(BaseModel):
@@ -184,6 +195,9 @@ class EditResponse(BaseModel):
     )
     timing_inference_ms: Optional[int] = Field(
         None, description="Time for image generation"
+    )
+    timing_upscale_ms: Optional[int] = Field(
+        None, description="Time for upscaling (if requested)"
     )
     timing_upload_ms: Optional[int] = Field(None, description="Time to upload image")
     timing_total_ms: Optional[int] = Field(None, description="Total processing time")
