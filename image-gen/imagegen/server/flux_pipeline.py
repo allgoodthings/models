@@ -6,7 +6,7 @@ Encapsulates model loading, configuration, and inference.
 Model: black-forest-labs/FLUX.2-klein-9B
 - 9B parameter rectified flow transformer
 - Step-distilled to 4 steps
-- VRAM: ~19GB (fits on RTX 4090 24GB)
+- Uses TorchAO FP8 quantization to fit on 24GB VRAM (~18-20GB)
 - Supports text-to-image and multi-reference editing
 """
 
@@ -15,22 +15,32 @@ import io
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import torch
 from PIL import Image
 
 logger = logging.getLogger("imagegen.flux")
 
+# Quantization mode type
+QuantizationMode = Literal["none", "fp8", "int8"]
+
 
 @dataclass
 class FluxConfig:
-    """Configuration for FLUX pipeline."""
+    """Configuration for FLUX pipeline.
+
+    Memory requirements (FLUX.2-klein-9B):
+    - BF16 (no quantization): ~29GB VRAM - use with 32GB+ GPUs
+    - FP8 quantization: ~18GB VRAM - use with 24GB GPUs (RTX 4090)
+    - INT8 quantization: ~16GB VRAM - use with 20GB+ GPUs
+    """
 
     model_id: str = "black-forest-labs/FLUX.2-klein-9B"
     torch_dtype: torch.dtype = field(default_factory=lambda: torch.bfloat16)
-    enable_cpu_offload: bool = False  # ~19GB VRAM fits on RTX 4090 (24GB)
-    enable_attention_slicing: bool = False
+    quantization: QuantizationMode = "none"  # "none" for 32GB+, "fp8" for 24GB
+    enable_cpu_offload: bool = False  # Only as fallback, significantly slower
+    enable_compile: bool = False  # torch.compile for extra speed (slower first run)
     hf_token: Optional[str] = None
 
     def __post_init__(self):
@@ -65,29 +75,53 @@ class FluxPipeline:
 
         logger.info(f"Loading FLUX model: {self.config.model_id}")
         logger.info(f"  torch_dtype: {self.config.torch_dtype}")
+        logger.info(f"  quantization: {self.config.quantization}")
         logger.info(f"  cpu_offload: {self.config.enable_cpu_offload}")
+        logger.info(f"  compile: {self.config.enable_compile}")
 
         # Import here to avoid slow startup when not using pipeline
         from diffusers import Flux2KleinPipeline
 
-        self._pipe = Flux2KleinPipeline.from_pretrained(
-            self.config.model_id,
-            torch_dtype=self.config.torch_dtype,
-            token=self.config.hf_token,
-        )
+        if self.config.quantization != "none":
+            # Use TorchAO quantization for memory efficiency
+            from diffusers import PipelineQuantizationConfig, TorchAoConfig
 
-        # Enable CPU offload for memory efficiency on consumer GPUs
-        if self.config.enable_cpu_offload:
-            logger.info("Enabling model CPU offload")
-            self._pipe.enable_model_cpu_offload()
+            quant_type = "float8wo" if self.config.quantization == "fp8" else "int8wo"
+            logger.info(f"Using TorchAO {quant_type} quantization")
+
+            pipeline_quant_config = PipelineQuantizationConfig(
+                quant_mapping={"transformer": TorchAoConfig(quant_type)}
+            )
+
+            self._pipe = Flux2KleinPipeline.from_pretrained(
+                self.config.model_id,
+                quantization_config=pipeline_quant_config,
+                torch_dtype=self.config.torch_dtype,
+                token=self.config.hf_token,
+                device_map="cuda",
+            )
         else:
-            # Move to GPU directly
-            self._pipe = self._pipe.to("cuda")
+            # Load without quantization (requires 48GB+ VRAM)
+            self._pipe = Flux2KleinPipeline.from_pretrained(
+                self.config.model_id,
+                torch_dtype=self.config.torch_dtype,
+                token=self.config.hf_token,
+            )
 
-        # Enable attention slicing if requested (reduces memory but slower)
-        if self.config.enable_attention_slicing:
-            logger.info("Enabling attention slicing")
-            self._pipe.enable_attention_slicing()
+            # Enable CPU offload as fallback for memory efficiency
+            if self.config.enable_cpu_offload:
+                logger.info("Enabling model CPU offload")
+                self._pipe.enable_model_cpu_offload()
+            else:
+                # Move to GPU directly
+                self._pipe = self._pipe.to("cuda")
+
+        # Optional torch.compile for extra speed (slower first inference)
+        if self.config.enable_compile:
+            logger.info("Compiling transformer with torch.compile")
+            self._pipe.transformer = torch.compile(
+                self._pipe.transformer, mode="max-autotune", fullgraph=True
+            )
 
         self._is_loaded = True
         logger.info("FLUX model loaded successfully")

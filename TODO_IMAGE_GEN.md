@@ -76,6 +76,7 @@ FLUX.2 [klein] 9B distilled image generation service following the lip-sync-v2 p
 |----------|----------|---------|-------------|
 | `HUGGING_FACE_TOKEN` | Yes | - | HF token for gated model |
 | `PRELOAD_MODELS` | No | `true` | Load model on startup |
+| `QUANTIZATION` | No | `none` | Quantization mode: `none`, `fp8`, `int8` |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 | `HF_HOME` | No | `~/.cache/huggingface` | Model cache dir |
 
@@ -104,8 +105,15 @@ FLUX.2 [klein] 9B distilled image generation service following the lip-sync-v2 p
 
 - **Model**: `black-forest-labs/FLUX.2-klein-9B`
   - 9B parameter rectified flow transformer
-  - Step-distilled to 4 steps, sub-second generation
-  - VRAM: ~19GB (fits on RTX 4090 24GB with headroom)
+  - Step-distilled to 4 steps
   - Supports both text-to-image and multi-reference image editing
+
+- **Memory Requirements**:
+  - BF16 (no quantization): ~29GB VRAM - best quality
+  - FP8 quantization: ~18GB VRAM - minor quality trade-off
+
+- **GPU Targets**:
+  - 32GB+ (A6000, etc.): BF16 without quantization (recommended)
+  - 24GB (RTX 4090): FP8 quantization via TorchAO
+
 - Reference files: `/Users/biz/Documents/projects/ScenemaAI/models/lip-sync-v2/`
-- GPU target: RTX 4090 (24GB)

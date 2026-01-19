@@ -18,15 +18,16 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch>=2.0.0",
+    "torch>=2.5.0",  # Required for TorchAO FP8 quantization
     "torchvision>=0.15.0",
-    "diffusers>=0.30.0",
+    "torchao>=0.8.0",  # FP8 quantization support
+    "diffusers @ git+https://github.com/huggingface/diffusers.git",  # Need dev for Flux2KleinPipeline
     "transformers>=4.40.0",
     "accelerate>=0.30.0",
     "safetensors>=0.4.0",
     "sentencepiece>=0.2.0",
     "protobuf>=4.0.0",
-    "huggingface-hub>=0.23.0",
+    "huggingface-hub>=0.23.0,<1.0",  # diffusers compatibility
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "httpx>=0.25.0",
@@ -47,6 +48,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["imagegen"]

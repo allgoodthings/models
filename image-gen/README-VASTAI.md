@@ -2,7 +2,7 @@
 
 Quick guide to deploy and test the FLUX.2-klein-9B image generation service on Vast AI.
 
-**Model:** `black-forest-labs/FLUX.2-klein-9B` (~19GB VRAM, fits on RTX 4090 24GB)
+**Model:** `black-forest-labs/FLUX.2-klein-9B`
 
 ## Prerequisites
 
@@ -14,11 +14,13 @@ Quick guide to deploy and test the FLUX.2-klein-9B image generation service on V
 
 ### Recommended Specs
 
-| GPU | VRAM | Expected Performance |
-|-----|------|---------------------|
-| RTX 4090 | 24GB | Primary target (~19GB model, 5GB headroom) |
-| A6000 | 48GB | More headroom for larger batches |
-| A100 | 40/80GB | Best performance |
+| GPU | VRAM | Mode | Expected Performance |
+|-----|------|------|---------------------|
+| **32GB+ (A6000, etc.)** | 32GB+ | BF16 (no quantization) | Best quality, 1-2s inference |
+| RTX 4090 | 24GB | FP8 quantization | Slightly lower quality, ~1s inference |
+| A100 | 40/80GB | BF16 | Best performance |
+
+**Recommended**: 32GB GPU for BF16 (best quality, no quantization)
 
 ### Instance Configuration
 
@@ -49,11 +51,10 @@ cd models/image-gen
 # Set HuggingFace token
 export HUGGING_FACE_TOKEN="hf_your_token_here"
 
-# Install dependencies
-pip install -e .
-
-# Or with uv (faster)
+# Install uv (fast package manager)
 pip install uv
+
+# Install dependencies (uses torch 2.5+ for TorchAO FP8 support)
 uv pip install -e .
 ```
 
@@ -65,20 +66,35 @@ uv pip install -e .
 python scripts/benchmark_vram.py
 ```
 
-Expected output:
+Expected output (32GB GPU, BF16):
 ```
 ============================================================
-FLUX.2 klein VRAM Benchmark
+FLUX.2-klein-9B VRAM Benchmark
 ============================================================
-GPU: NVIDIA GeForce RTX 4090
-Total VRAM: 24.0 GB
-...
+GPU: NVIDIA A6000
+Total VRAM: 48.0 GB
+PyTorch: 2.5.x
+CUDA: 12.x
+
+48.0GB VRAM is sufficient for BF16 (no quantization)
+
+------------------------------------------------------------
+Loading FLUX.2-klein-9B model (BF16, no quantization)...
+------------------------------------------------------------
+
+Test: Model Load (BF16)
+VRAM Peak: ~29 GB
+Duration: ~60s (first load, downloads model)
+
+Test: Generate 1024x1024
+VRAM Peak: ~29 GB
+Duration: ~1500ms (1.5s)
 
 BENCHMARK SUMMARY
 ============================================================
-Max VRAM Peak: ~16-20 GB
-Available VRAM: 24.0 GB
-Headroom: 4-8 GB
+Max VRAM Peak: ~29 GB
+Available VRAM: 48.0 GB
+Headroom: ~19 GB
 
 VRAM usage is within safe limits.
 ```
@@ -86,8 +102,11 @@ VRAM usage is within safe limits.
 ## Step 5: Start the Server
 
 ```bash
-# Run the server
+# For 32GB+ GPU (BF16, best quality)
 uvicorn imagegen.server.main:app --host 0.0.0.0 --port 7000
+
+# For 24GB GPU (FP8 quantization)
+QUANTIZATION=fp8 uvicorn imagegen.server.main:app --host 0.0.0.0 --port 7000
 
 # Or with Makefile
 make run
@@ -95,8 +114,8 @@ make run
 
 Server will:
 1. Check for HUGGING_FACE_TOKEN
-2. Download FLUX model (~12GB, takes a few minutes first time)
-3. Load model with CPU offload
+2. Download FLUX model (~20GB, takes a few minutes first time)
+3. Load model to GPU (BF16 or FP8 depending on QUANTIZATION)
 4. Start accepting requests
 
 ## Step 6: Test the API
@@ -148,8 +167,22 @@ python scripts/test_api.py
 | `HUGGING_FACE_TOKEN` | Yes | - | HF token for gated model |
 | `HF_TOKEN` | Alt | - | Alternative name for HF token |
 | `PRELOAD_MODELS` | No | `true` | Load model on startup |
+| `QUANTIZATION` | No | `none` | `none` (BF16, 32GB+), `fp8` (24GB), `int8` (20GB) |
 | `LOG_LEVEL` | No | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `HF_HOME` | No | `~/.cache/huggingface` | Model cache directory |
+
+### Quantization Modes
+
+- **`none` (default)**: BF16 precision, best quality, requires 32GB+ VRAM
+- **`fp8`**: FP8 quantization via TorchAO, minor quality trade-off, fits in 24GB
+- **`int8`**: INT8 quantization, more quality trade-off, fits in 20GB
+
+```bash
+# For 24GB GPU (RTX 4090), use FP8
+export QUANTIZATION=fp8
+
+# For 32GB+ GPU, use default BF16 (no export needed)
+```
 
 ## Troubleshooting
 
@@ -157,22 +190,24 @@ python scripts/test_api.py
 
 If you get CUDA OOM errors:
 
-1. **Reduce resolution**: Try 768x768 instead of 1024x1024
-2. **Check other processes**: `nvidia-smi` to see what's using VRAM
-3. **Restart the server**: Clear any fragmented memory
+1. **Enable quantization**: Set `QUANTIZATION=fp8` for 24GB GPUs
+2. **Reduce resolution**: Try 768x768 instead of 1024x1024
+3. **Check other processes**: `nvidia-smi` to see what's using VRAM
+4. **Restart the server**: Clear any fragmented memory
 
 ### Model Download Issues
 
 If model download fails:
 
 1. **Check HF token**: Ensure it has access to gated models
-2. **Accept model terms**: Visit https://huggingface.co/black-forest-labs/FLUX.1-schnell and accept
-3. **Check disk space**: Model needs ~12GB
+2. **Accept model terms**: Visit https://huggingface.co/black-forest-labs/FLUX.2-klein-9B and accept
+3. **Check disk space**: Model needs ~20GB
 
 ### Slow First Request
 
-First request is slow because:
-- Model components are moved from CPU to GPU on-demand (CPU offload)
+First request may be slightly slower due to:
+- CUDA kernel warmup
+- torch.compile optimization (if enabled)
 - Subsequent requests are faster
 
 ### Port Forwarding

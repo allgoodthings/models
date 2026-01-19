@@ -109,9 +109,17 @@ async def lifespan(app: FastAPI):
     logger.info("-" * 40)
     logger.info("Loading FLUX model...")
 
+    # Quantization mode: "none" (BF16, needs 32GB), "fp8" (24GB), "int8" (20GB)
+    quantization = os.environ.get("QUANTIZATION", "none")
+    if quantization not in ("none", "fp8", "int8"):
+        logger.warning(f"Invalid QUANTIZATION={quantization}, using 'none'")
+        quantization = "none"
+
+    logger.info(f"Quantization mode: {quantization}")
+
     config = FluxConfig(
         hf_token=hf_token,
-        # ~19GB VRAM fits on RTX 4090 (24GB), no offload needed
+        quantization=quantization,  # type: ignore
     )
     pipeline = FluxPipeline(config)
     pipeline.load()
