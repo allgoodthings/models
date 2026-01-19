@@ -153,8 +153,9 @@ FastAPI service providing text-to-image generation and multi-reference image edi
 
 ## Features
 
-- **Text-to-Image**: Generate images from text prompts
-- **Multi-Reference Editing**: Edit images using 1-4 reference images (native FLUX.2-klein support)
+- **Batch Generation**: Generate multiple images in one request for scene consistency
+- **Reference Images**: Use up to 16 reference images to guide generation
+- **Upscaling**: Optional 2x/4x Real-ESRGAN upscaling
 - **S3 Upload**: Direct upload to presigned S3 URLs
 - **GPU Optimized**: BF16 on 32GB+ GPUs, FP8 quantization for 24GB GPUs
 
@@ -211,62 +212,65 @@ Health check with model status and GPU info.
 
 ### POST /generate
 
-Generate image from text prompt with optional upscaling.
+Batch image generation with optional reference images and upscaling.
 
 ```json
 // Request
 {
-  "prompt": "A beautiful sunset over mountains",
-  "upload_url": "https://s3.../presigned-put-url",
-  "width": 1024,
-  "height": 1024,
-  "num_steps": 4,
-  "seed": 42,
-  "output_format": "png",
-  "upscale": 4  // Optional: 2 or 4 for 2x/4x upscaling
-}
-
-// Response
-{
-  "success": true,
-  "output_url": "https://s3.../output.png",
-  "width": 4096,
-  "height": 4096,
-  "seed": 42,
-  "timing_inference_ms": 2100,
-  "timing_upscale_ms": 1500,
-  "timing_total_ms": 4100
-}
-```
-
-### POST /edit
-
-Edit image using reference images with optional upscaling.
-
-```json
-// Request
-{
-  "prompt": "Replace background with beach scene",
-  "reference_images": [
+  "prompts": [
+    "Scene 1: A hero enters a dark castle",
+    "Scene 2: The hero discovers a treasure room"
+  ],
+  "upload_urls": [
+    "https://s3.../scene1.png",
+    "https://s3.../scene2.png"
+  ],
+  "images": [  // Optional: reference images for consistency
     {"url": "https://...", "weight": 1.0}
   ],
-  "upload_url": "https://s3.../presigned-put-url",
-  "upscale": 4  // Optional: 2 or 4 for 2x/4x upscaling
+  "width": 1024,
+  "height": 768,
+  "num_steps": 4,
+  "seed": 42,
+  "upscale": 4,  // Optional: 2 or 4
+  "output_format": "png"
 }
 
 // Response
 {
   "success": true,
-  "output_url": "https://s3.../output.png",
-  "references_loaded": 1,
-  "width": 4096,
-  "height": 4096,
-  "timing_download_ms": 200,
-  "timing_inference_ms": 2300,
-  "timing_upscale_ms": 1500,
-  "timing_total_ms": 4200
+  "results": [
+    {
+      "index": 0,
+      "success": true,
+      "output_url": "https://s3.../scene1.png",
+      "width": 4096,
+      "height": 3072,
+      "seed": 42,
+      "timing_inference_ms": 1000,
+      "timing_upscale_ms": 1500,
+      "timing_upload_ms": 200
+    },
+    {
+      "index": 1,
+      "success": true,
+      "output_url": "https://s3.../scene2.png",
+      "width": 4096,
+      "height": 3072,
+      "seed": 43,
+      "timing_inference_ms": 1000,
+      "timing_upscale_ms": 1500,
+      "timing_upload_ms": 200
+    }
+  ],
+  "timing_total_ms": 5500
 }
 ```
+
+**Notes:**
+- `prompts` and `upload_urls` must have the same length
+- `images` are shared across all prompts for scene consistency
+- Seeds increment sequentially (seed, seed+1, seed+2, ...)
 
 ### POST /upscale
 

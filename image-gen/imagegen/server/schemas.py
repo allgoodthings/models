@@ -1,10 +1,8 @@
-"""
-Pydantic schemas for Image-Gen API.
-"""
+"""Pydantic schemas for Image-Gen API."""
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # =============================================================================
@@ -15,241 +13,97 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     """Health check response."""
 
-    status: Literal["healthy", "loading", "unhealthy"] = Field(
-        ..., description="Server status"
-    )
-    flux_loaded: bool = Field(..., description="Whether FLUX model is loaded")
-    gpu_available: bool = Field(..., description="Whether GPU is available")
-    gpu_name: Optional[str] = Field(None, description="GPU device name")
-    gpu_memory_gb: Optional[float] = Field(None, description="Total GPU memory in GB")
-    gpu_memory_used_gb: Optional[float] = Field(None, description="Used GPU memory in GB")
+    status: Literal["healthy", "loading", "unhealthy"]
+    flux_loaded: bool
+    gpu_available: bool
+    gpu_name: Optional[str] = None
+    gpu_memory_gb: Optional[float] = None
+    gpu_memory_used_gb: Optional[float] = None
 
 
 # =============================================================================
-# Text-to-Image Generation
-# =============================================================================
-
-
-class GenerateRequest(BaseModel):
-    """Text-to-image generation request."""
-
-    prompt: str = Field(
-        ...,
-        description="Text prompt describing the image to generate",
-        min_length=1,
-        max_length=2000,
-    )
-    upload_url: str = Field(
-        ...,
-        description="Presigned URL for uploading the output image (PUT request)",
-    )
-    width: int = Field(
-        1024,
-        description="Output image width in pixels",
-        ge=256,
-        le=2048,
-    )
-    height: int = Field(
-        1024,
-        description="Output image height in pixels",
-        ge=256,
-        le=2048,
-    )
-    num_steps: int = Field(
-        4,
-        description="Number of inference steps (FLUX.2 klein uses 4 steps)",
-        ge=1,
-        le=50,
-    )
-    guidance_scale: float = Field(
-        1.0,
-        description="Classifier-free guidance scale (1.0 = no guidance for distilled models)",
-        ge=0.0,
-        le=20.0,
-    )
-    seed: Optional[int] = Field(
-        None,
-        description="Random seed for reproducibility (None = random)",
-    )
-    output_format: Literal["png", "jpeg", "webp"] = Field(
-        "png",
-        description="Output image format",
-    )
-    upscale: Optional[Literal[2, 4]] = Field(
-        None,
-        description="Optional upscale factor (2x or 4x) to apply after generation",
-    )
-
-
-class GenerateResponse(BaseModel):
-    """Text-to-image generation response."""
-
-    success: bool = Field(..., description="Whether generation succeeded")
-    error_message: Optional[str] = Field(None, description="Error message if failed")
-    output_url: Optional[str] = Field(
-        None, description="URL to uploaded output image (without query params)"
-    )
-    width: Optional[int] = Field(None, description="Generated image width")
-    height: Optional[int] = Field(None, description="Generated image height")
-    seed: Optional[int] = Field(None, description="Seed used for generation")
-    timing_inference_ms: Optional[int] = Field(
-        None, description="Time for image generation"
-    )
-    timing_upscale_ms: Optional[int] = Field(
-        None, description="Time for upscaling (if requested)"
-    )
-    timing_upload_ms: Optional[int] = Field(None, description="Time to upload image")
-    timing_total_ms: Optional[int] = Field(None, description="Total processing time")
-
-
-# =============================================================================
-# Multi-Reference Image Editing
+# Image Generation (Batch)
 # =============================================================================
 
 
 class ReferenceImage(BaseModel):
-    """Reference image for guided editing."""
+    """Reference image for guided generation."""
 
-    url: str = Field(..., description="URL to reference image")
-    weight: float = Field(
-        1.0,
-        description="Weight/influence of this reference (0.0-2.0)",
-        ge=0.0,
-        le=2.0,
-    )
+    url: str
+    weight: float = Field(1.0, ge=0.0, le=2.0)
 
 
-class EditRequest(BaseModel):
-    """Multi-reference image editing request."""
+class GenerateRequest(BaseModel):
+    """Batch image generation request."""
 
-    prompt: str = Field(
-        ...,
-        description="Text prompt describing the desired edit/output",
-        min_length=1,
-        max_length=2000,
-    )
-    reference_images: List[ReferenceImage] = Field(
-        ...,
-        description="Reference images to guide generation (1-4 images)",
-        min_length=1,
-        max_length=4,
-    )
-    upload_url: str = Field(
-        ...,
-        description="Presigned URL for uploading the output image (PUT request)",
-    )
-    width: int = Field(
-        1024,
-        description="Output image width in pixels",
-        ge=256,
-        le=2048,
-    )
-    height: int = Field(
-        1024,
-        description="Output image height in pixels",
-        ge=256,
-        le=2048,
-    )
-    num_steps: int = Field(
-        4,
-        description="Number of inference steps",
-        ge=1,
-        le=50,
-    )
-    guidance_scale: float = Field(
-        1.0,
-        description="Classifier-free guidance scale",
-        ge=0.0,
-        le=20.0,
-    )
-    seed: Optional[int] = Field(
-        None,
-        description="Random seed for reproducibility",
-    )
-    output_format: Literal["png", "jpeg", "webp"] = Field(
-        "png",
-        description="Output image format",
-    )
-    upscale: Optional[Literal[2, 4]] = Field(
-        None,
-        description="Optional upscale factor (2x or 4x) to apply after generation",
-    )
+    prompts: List[str] = Field(..., min_length=1, max_length=20)
+    upload_urls: List[str] = Field(..., min_length=1, max_length=20)
+    images: List[ReferenceImage] = Field(default_factory=list, max_length=16)
+    width: int = Field(1024, ge=256, le=2048)
+    height: int = Field(1024, ge=256, le=2048)
+    num_steps: int = Field(4, ge=1, le=50)
+    guidance_scale: float = Field(1.0, ge=0.0, le=20.0)
+    seed: Optional[int] = None
+    upscale: Optional[Literal[2, 4]] = None
+    output_format: Literal["png", "jpeg", "webp"] = "png"
+
+    @model_validator(mode="after")
+    def validate_lengths(self):
+        if len(self.prompts) != len(self.upload_urls):
+            raise ValueError("prompts and upload_urls must have same length")
+        return self
 
 
-class EditResponse(BaseModel):
-    """Multi-reference image editing response."""
+class GenerateResult(BaseModel):
+    """Result for a single generated image."""
 
-    success: bool = Field(..., description="Whether editing succeeded")
-    error_message: Optional[str] = Field(None, description="Error message if failed")
-    output_url: Optional[str] = Field(
-        None, description="URL to uploaded output image"
-    )
-    references_loaded: Optional[int] = Field(
-        None, description="Number of reference images loaded"
-    )
-    width: Optional[int] = Field(None, description="Generated image width")
-    height: Optional[int] = Field(None, description="Generated image height")
-    seed: Optional[int] = Field(None, description="Seed used for generation")
-    timing_download_ms: Optional[int] = Field(
-        None, description="Time to download reference images"
-    )
-    timing_inference_ms: Optional[int] = Field(
-        None, description="Time for image generation"
-    )
-    timing_upscale_ms: Optional[int] = Field(
-        None, description="Time for upscaling (if requested)"
-    )
-    timing_upload_ms: Optional[int] = Field(None, description="Time to upload image")
-    timing_total_ms: Optional[int] = Field(None, description="Total processing time")
+    index: int
+    success: bool
+    error: Optional[str] = None
+    output_url: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    seed: Optional[int] = None
+    timing_inference_ms: Optional[int] = None
+    timing_upscale_ms: Optional[int] = None
+    timing_upload_ms: Optional[int] = None
+
+
+class GenerateResponse(BaseModel):
+    """Batch image generation response."""
+
+    success: bool
+    results: List[GenerateResult]
+    timing_total_ms: int
 
 
 # =============================================================================
-# Image Upscaling
+# Image Upscaling (Standalone)
 # =============================================================================
 
 
 class UpscaleRequest(BaseModel):
     """Image upscaling request."""
 
-    image_url: str = Field(
-        ...,
-        description="URL of the image to upscale",
-    )
-    upload_url: str = Field(
-        ...,
-        description="Presigned URL for uploading the upscaled image (PUT request)",
-    )
-    scale: Literal[2, 4] = Field(
-        4,
-        description="Upscale factor (2x or 4x)",
-    )
-    output_format: Literal["png", "jpeg", "webp"] = Field(
-        "png",
-        description="Output image format",
-    )
+    image_url: str
+    upload_url: str
+    scale: Literal[2, 4] = 4
+    output_format: Literal["png", "jpeg", "webp"] = "png"
 
 
 class UpscaleResponse(BaseModel):
     """Image upscaling response."""
 
-    success: bool = Field(..., description="Whether upscaling succeeded")
-    error_message: Optional[str] = Field(None, description="Error message if failed")
-    output_url: Optional[str] = Field(
-        None, description="URL to uploaded upscaled image"
-    )
-    input_width: Optional[int] = Field(None, description="Input image width")
-    input_height: Optional[int] = Field(None, description="Input image height")
-    output_width: Optional[int] = Field(None, description="Output image width")
-    output_height: Optional[int] = Field(None, description="Output image height")
-    scale: Optional[int] = Field(None, description="Scale factor used")
-    timing_download_ms: Optional[int] = Field(
-        None, description="Time to download input image"
-    )
-    timing_load_ms: Optional[int] = Field(
-        None, description="Time to load upscaler model"
-    )
-    timing_upscale_ms: Optional[int] = Field(
-        None, description="Time to upscale image"
-    )
-    timing_upload_ms: Optional[int] = Field(None, description="Time to upload image")
-    timing_total_ms: Optional[int] = Field(None, description="Total processing time")
+    success: bool
+    error: Optional[str] = None
+    output_url: Optional[str] = None
+    input_width: Optional[int] = None
+    input_height: Optional[int] = None
+    output_width: Optional[int] = None
+    output_height: Optional[int] = None
+    scale: Optional[int] = None
+    timing_download_ms: Optional[int] = None
+    timing_load_ms: Optional[int] = None
+    timing_upscale_ms: Optional[int] = None
+    timing_upload_ms: Optional[int] = None
+    timing_total_ms: Optional[int] = None

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-API Test Script for Image-Gen Service
-
-Tests the server endpoints locally.
+API Test Script for Image-Gen Service.
 
 Usage:
     python scripts/test_api.py [--base-url http://localhost:7000]
@@ -11,7 +9,6 @@ Usage:
 import argparse
 import json
 import sys
-import time
 
 import httpx
 
@@ -27,136 +24,141 @@ def test_health(client: httpx.Client) -> bool:
     print(f"Response: {json.dumps(response.json(), indent=2)}")
 
     if response.status_code != 200:
-        print("FAIL: Health check returned non-200")
         return False
 
     data = response.json()
-    if data["status"] != "healthy":
-        print(f"FAIL: Status is {data['status']}, expected 'healthy'")
+    if data["status"] != "healthy" or not data["flux_loaded"]:
+        print(f"FAIL: status={data['status']}, flux_loaded={data['flux_loaded']}")
         return False
 
-    if not data["flux_loaded"]:
-        print("FAIL: FLUX model not loaded")
-        return False
-
-    print("PASS: Health check OK")
+    print("PASS")
     return True
 
 
-def test_root(client: httpx.Client) -> bool:
-    """Test root endpoint."""
+def test_generate_single(client: httpx.Client) -> bool:
+    """Test single image generation."""
     print("\n" + "=" * 60)
-    print("TEST: GET /")
+    print("TEST: POST /generate (single)")
     print("=" * 60)
 
-    response = client.get("/")
-    print(f"Status: {response.status_code}")
-    print(f"Response: {json.dumps(response.json(), indent=2)}")
-
-    if response.status_code != 200:
-        print("FAIL: Root endpoint returned non-200")
-        return False
-
-    print("PASS: Root endpoint OK")
-    return True
-
-
-def test_generate(client: httpx.Client) -> bool:
-    """Test generate endpoint."""
-    print("\n" + "=" * 60)
-    print("TEST: POST /generate")
-    print("=" * 60)
-
-    # Use httpbin for testing (it accepts PUT requests)
     request_data = {
-        "prompt": "A cute robot cat sitting on a windowsill, digital art",
-        "upload_url": "https://httpbin.org/put",
+        "prompts": ["A cute robot cat sitting on a windowsill, digital art"],
+        "upload_urls": ["https://httpbin.org/put"],
         "width": 512,
         "height": 512,
         "num_steps": 4,
-        "guidance_scale": 0.0,
-        "output_format": "png",
+        "seed": 42,
     }
 
     print(f"Request: {json.dumps(request_data, indent=2)}")
 
-    start_time = time.time()
     response = client.post("/generate", json=request_data, timeout=120.0)
-    elapsed = time.time() - start_time
-
-    print(f"\nStatus: {response.status_code}")
-    print(f"Elapsed: {elapsed:.1f}s")
+    print(f"Status: {response.status_code}")
     print(f"Response: {json.dumps(response.json(), indent=2)}")
 
     if response.status_code != 200:
-        print("FAIL: Generate returned non-200")
         return False
 
     data = response.json()
-    if not data.get("success"):
-        print(f"FAIL: Generation failed: {data.get('error_message')}")
+    if not data.get("success") or len(data.get("results", [])) != 1:
+        print(f"FAIL: success={data.get('success')}, results={len(data.get('results', []))}")
         return False
 
-    print("PASS: Generate OK")
+    result = data["results"][0]
+    if not result.get("success") or result.get("seed") != 42:
+        print(f"FAIL: result success={result.get('success')}, seed={result.get('seed')}")
+        return False
+
+    print("PASS")
     return True
 
 
-def test_generate_large(client: httpx.Client) -> bool:
-    """Test generate with larger resolution."""
+def test_generate_batch(client: httpx.Client) -> bool:
+    """Test batch image generation."""
+    print("\n" + "=" * 60)
+    print("TEST: POST /generate (batch)")
+    print("=" * 60)
+
+    request_data = {
+        "prompts": [
+            "A red apple on a wooden table",
+            "A green apple on a wooden table",
+            "A yellow banana on a wooden table",
+        ],
+        "upload_urls": [
+            "https://httpbin.org/put",
+            "https://httpbin.org/put",
+            "https://httpbin.org/put",
+        ],
+        "width": 512,
+        "height": 512,
+        "num_steps": 4,
+        "seed": 100,
+    }
+
+    print(f"Generating {len(request_data['prompts'])} images...")
+
+    response = client.post("/generate", json=request_data, timeout=300.0)
+    print(f"Status: {response.status_code}")
+
+    if response.status_code != 200:
+        return False
+
+    data = response.json()
+    print(f"Response: success={data.get('success')}, total_ms={data.get('timing_total_ms')}")
+
+    if not data.get("success") or len(data.get("results", [])) != 3:
+        return False
+
+    # Check sequential seeds
+    for i, result in enumerate(data["results"]):
+        expected_seed = 100 + i
+        if result.get("seed") != expected_seed:
+            print(f"FAIL: result[{i}] seed={result.get('seed')}, expected={expected_seed}")
+            return False
+        print(f"  [{i}] seed={result['seed']}, inference={result['timing_inference_ms']}ms")
+
+    print("PASS")
+    return True
+
+
+def test_generate_1024(client: httpx.Client) -> bool:
+    """Test 1024x1024 generation."""
     print("\n" + "=" * 60)
     print("TEST: POST /generate (1024x1024)")
     print("=" * 60)
 
     request_data = {
-        "prompt": "A majestic mountain landscape at sunset, photorealistic, 8k",
-        "upload_url": "https://httpbin.org/put",
+        "prompts": ["A majestic mountain landscape at sunset, photorealistic"],
+        "upload_urls": ["https://httpbin.org/put"],
         "width": 1024,
         "height": 1024,
         "num_steps": 4,
-        "guidance_scale": 0.0,
         "seed": 42,
-        "output_format": "png",
     }
 
-    print(f"Request: {json.dumps(request_data, indent=2)}")
-
-    start_time = time.time()
     response = client.post("/generate", json=request_data, timeout=180.0)
-    elapsed = time.time() - start_time
-
-    print(f"\nStatus: {response.status_code}")
-    print(f"Elapsed: {elapsed:.1f}s")
-    print(f"Response: {json.dumps(response.json(), indent=2)}")
+    print(f"Status: {response.status_code}")
 
     if response.status_code != 200:
-        print("FAIL: Generate returned non-200")
         return False
 
     data = response.json()
+    result = data["results"][0] if data.get("results") else {}
+    print(f"Response: success={result.get('success')}, inference={result.get('timing_inference_ms')}ms")
+
     if not data.get("success"):
-        print(f"FAIL: Generation failed: {data.get('error_message')}")
+        print(f"FAIL: {result.get('error')}")
         return False
 
-    # Check seed was used
-    if data.get("seed") != 42:
-        print(f"WARN: Seed mismatch: got {data.get('seed')}, expected 42")
-
-    print("PASS: Generate (1024x1024) OK")
+    print("PASS")
     return True
 
 
 def main():
     parser = argparse.ArgumentParser(description="Test Image-Gen API")
-    parser.add_argument(
-        "--base-url",
-        default="http://localhost:7000",
-        help="Base URL of the server",
-    )
-    parser.add_argument(
-        "--skip-generate",
-        action="store_true",
-        help="Skip generation tests (faster)",
-    )
+    parser.add_argument("--base-url", default="http://localhost:7000")
+    parser.add_argument("--skip-generate", action="store_true", help="Skip generation tests")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -167,31 +169,24 @@ def main():
     results = []
 
     with httpx.Client(base_url=args.base_url, timeout=30.0) as client:
-        # Test health first
         results.append(("health", test_health(client)))
-        results.append(("root", test_root(client)))
 
-        # Only run generation tests if health passes
         if results[0][1] and not args.skip_generate:
-            results.append(("generate", test_generate(client)))
-            results.append(("generate_large", test_generate_large(client)))
+            results.append(("generate_single", test_generate_single(client)))
+            results.append(("generate_batch", test_generate_batch(client)))
+            results.append(("generate_1024", test_generate_1024(client)))
 
     # Summary
     print("\n" + "=" * 60)
-    print("TEST SUMMARY")
+    print("SUMMARY")
     print("=" * 60)
 
     passed = sum(1 for _, r in results if r)
-    total = len(results)
-
     for name, result in results:
-        status = "PASS" if result else "FAIL"
-        print(f"  {name}: {status}")
+        print(f"  {name}: {'PASS' if result else 'FAIL'}")
+    print(f"\nTotal: {passed}/{len(results)}")
 
-    print(f"\nTotal: {passed}/{total} passed")
-
-    if passed != total:
-        sys.exit(1)
+    sys.exit(0 if passed == len(results) else 1)
 
 
 if __name__ == "__main__":
