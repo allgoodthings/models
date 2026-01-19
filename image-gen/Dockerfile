@@ -60,17 +60,14 @@ RUN uv pip install --system --no-cache \
 # Install TorchAO nightly for FP8 quantization (optional, for 9B model on 24GB)
 RUN uv pip install --system --no-cache --pre torchao --index-url https://download.pytorch.org/whl/nightly/cu126
 
-# Install Real-ESRGAN and dependencies
+# Install Real-ESRGAN dependencies (skip facexlib which has Python 3.11 incompatible deps)
+# basicsr from git has torchvision compatibility fixes
 RUN uv pip install --system --no-cache \
-    basicsr>=1.4.2 \
-    realesrgan>=0.3.0
+    "git+https://github.com/XPixelGroup/BasicSR.git" \
+    opencv-python>=4.8.0
 
-# Fix basicsr/torchvision compatibility issue
-# basicsr imports from torchvision.transforms.functional_tensor which was removed
-RUN BASICSR_PATH=$(uv pip show basicsr | grep Location | cut -d' ' -f2)/basicsr && \
-    sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' \
-    "$BASICSR_PATH/data/degradations.py" && \
-    echo "Patched basicsr at $BASICSR_PATH for torchvision compatibility"
+# Install realesrgan without deps (we manually installed what we need above)
+RUN uv pip install --system --no-cache --no-deps realesrgan>=0.3.0
 
 # Install server dependencies
 RUN uv pip install --system --no-cache \
