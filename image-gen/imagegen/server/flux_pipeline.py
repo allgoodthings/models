@@ -39,7 +39,7 @@ class FluxConfig:
 
     model_id: str = field(default_factory=lambda: os.environ.get(
         "MODEL_ID", "black-forest-labs/FLUX.2-klein-4B"
-    ).replace("4B", "black-forest-labs/FLUX.2-klein-4B").replace("9B", "black-forest-labs/FLUX.2-klein-9B"))
+    ))
     torch_dtype: torch.dtype = field(default_factory=lambda: torch.bfloat16)
     quantization: QuantizationMode = "none"
     enable_cpu_offload: bool = False
