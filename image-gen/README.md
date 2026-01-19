@@ -252,6 +252,43 @@ Edit image using reference images.
 }
 ```
 
+### POST /upscale
+
+Upscale an image using Real-ESRGAN (2x or 4x).
+
+Model is loaded on-demand and unloaded after each request to minimize VRAM usage.
+
+```json
+// Request
+{
+  "image_url": "https://s3.../input.png",
+  "upload_url": "https://s3.../presigned-put-url",
+  "scale": 4,
+  "output_format": "png"
+}
+
+// Response
+{
+  "success": true,
+  "output_url": "https://s3.../output.png",
+  "input_width": 1024,
+  "input_height": 1024,
+  "output_width": 4096,
+  "output_height": 4096,
+  "scale": 4,
+  "timing_download_ms": 150,
+  "timing_load_ms": 200,
+  "timing_upscale_ms": 1500,
+  "timing_upload_ms": 500,
+  "timing_total_ms": 2350
+}
+```
+
+**Performance (RTX 5090):**
+- Model load: ~100-200ms
+- Upscale 1024→4096: ~1-2s (with tiling)
+- VRAM: ~2GB during inference
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -291,7 +328,8 @@ image-gen/
 │       ├── __init__.py
 │       ├── main.py           # FastAPI entry point
 │       ├── schemas.py        # Pydantic models
-│       └── flux_pipeline.py  # FLUX wrapper
+│       ├── flux_pipeline.py  # FLUX wrapper
+│       └── upscaler.py       # Real-ESRGAN upscaler
 ├── scripts/
 │   ├── benchmark_vram.py     # VRAM profiling
 │   └── test_api.py           # Manual API testing

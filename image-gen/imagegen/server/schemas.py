@@ -187,3 +187,55 @@ class EditResponse(BaseModel):
     )
     timing_upload_ms: Optional[int] = Field(None, description="Time to upload image")
     timing_total_ms: Optional[int] = Field(None, description="Total processing time")
+
+
+# =============================================================================
+# Image Upscaling
+# =============================================================================
+
+
+class UpscaleRequest(BaseModel):
+    """Image upscaling request."""
+
+    image_url: str = Field(
+        ...,
+        description="URL of the image to upscale",
+    )
+    upload_url: str = Field(
+        ...,
+        description="Presigned URL for uploading the upscaled image (PUT request)",
+    )
+    scale: Literal[2, 4] = Field(
+        4,
+        description="Upscale factor (2x or 4x)",
+    )
+    output_format: Literal["png", "jpeg", "webp"] = Field(
+        "png",
+        description="Output image format",
+    )
+
+
+class UpscaleResponse(BaseModel):
+    """Image upscaling response."""
+
+    success: bool = Field(..., description="Whether upscaling succeeded")
+    error_message: Optional[str] = Field(None, description="Error message if failed")
+    output_url: Optional[str] = Field(
+        None, description="URL to uploaded upscaled image"
+    )
+    input_width: Optional[int] = Field(None, description="Input image width")
+    input_height: Optional[int] = Field(None, description="Input image height")
+    output_width: Optional[int] = Field(None, description="Output image width")
+    output_height: Optional[int] = Field(None, description="Output image height")
+    scale: Optional[int] = Field(None, description="Scale factor used")
+    timing_download_ms: Optional[int] = Field(
+        None, description="Time to download input image"
+    )
+    timing_load_ms: Optional[int] = Field(
+        None, description="Time to load upscaler model"
+    )
+    timing_upscale_ms: Optional[int] = Field(
+        None, description="Time to upscale image"
+    )
+    timing_upload_ms: Optional[int] = Field(None, description="Time to upload image")
+    timing_total_ms: Optional[int] = Field(None, description="Total processing time")

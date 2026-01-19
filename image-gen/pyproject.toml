@@ -34,6 +34,9 @@ dependencies = [
     "pydantic>=2.5.0",
     "pillow>=10.0.0",
     "numpy>=1.24.0",
+    # Upscaling
+    "realesrgan>=0.3.0",  # Real-ESRGAN upscaler
+    "basicsr>=1.4.2",  # Required by realesrgan
 ]
 
 [project.optional-dependencies]

@@ -23,7 +23,10 @@ from .schemas import (
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
+    UpscaleRequest,
+    UpscaleResponse,
 )
+from .upscaler import Upscaler, UpscalerConfig
 
 # Configure logging
 log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -307,6 +310,78 @@ async def edit(request: EditRequest):
         )
 
 
+@app.post("/upscale", response_model=UpscaleResponse)
+async def upscale(request: UpscaleRequest):
+    """
+    Upscale an image using Real-ESRGAN.
+
+    Model is loaded on-demand and unloaded after each request
+    to minimize VRAM usage when not in use.
+    """
+    total_start = time.time()
+
+    logger.info("=" * 60)
+    logger.info("UPSCALE IMAGE")
+    logger.info("=" * 60)
+    logger.info(f"  Scale: {request.scale}x")
+    logger.info(f"  Format: {request.output_format}")
+
+    try:
+        # Download input image
+        download_start = time.time()
+        image = await download_image(request.image_url)
+        input_width, input_height = image.size
+        download_ms = int((time.time() - download_start) * 1000)
+        logger.info(f"  Downloaded {input_width}x{input_height} in {download_ms}ms")
+
+        # Load upscaler
+        load_start = time.time()
+        upscaler = Upscaler(UpscalerConfig())
+        upscaler.load()
+        load_ms = int((time.time() - load_start) * 1000)
+        logger.info(f"  Upscaler loaded in {load_ms}ms")
+
+        # Upscale
+        upscale_start = time.time()
+        upscaled = upscaler.upscale(image, scale=request.scale)
+        output_width, output_height = upscaled.size
+        upscale_ms = int((time.time() - upscale_start) * 1000)
+        logger.info(f"  Upscaled to {output_width}x{output_height} in {upscale_ms}ms")
+
+        # Unload to free VRAM
+        upscaler.unload()
+
+        # Convert to bytes and upload
+        image_bytes = image_to_bytes(upscaled, request.output_format)
+        content_type = get_content_type(request.output_format)
+        upload_ms = int(await upload_image(request.upload_url, image_bytes, content_type))
+
+        total_ms = int((time.time() - total_start) * 1000)
+        logger.info(f"  Complete in {total_ms}ms")
+
+        return UpscaleResponse(
+            success=True,
+            output_url=request.upload_url.split("?")[0],
+            input_width=input_width,
+            input_height=input_height,
+            output_width=output_width,
+            output_height=output_height,
+            scale=request.scale,
+            timing_download_ms=download_ms,
+            timing_load_ms=load_ms,
+            timing_upscale_ms=upscale_ms,
+            timing_upload_ms=upload_ms,
+            timing_total_ms=total_ms,
+        )
+
+    except Exception as e:
+        logger.error(f"Upscale failed: {e}")
+        return UpscaleResponse(
+            success=False,
+            error_message=str(e),
+        )
+
+
 @app.get("/")
 async def root():
     """Root endpoint with API info."""
@@ -319,6 +394,7 @@ async def root():
         "endpoints": [
             "POST /generate - Text-to-image generation",
             "POST /edit - Multi-reference image editing (1-4 images)",
+            "POST /upscale - Image upscaling (2x or 4x with Real-ESRGAN)",
             "GET /health - Health check",
         ],
     }
