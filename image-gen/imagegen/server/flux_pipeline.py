@@ -30,23 +30,30 @@ QuantizationMode = Literal["none", "fp8", "int8"]
 class FluxConfig:
     """Configuration for FLUX pipeline.
 
-    Memory requirements (FLUX.2-klein-9B):
-    - BF16 (no quantization): ~29GB VRAM - use with 32GB+ GPUs
-    - FP8 quantization: ~18GB VRAM - use with 24GB GPUs (RTX 4090)
-    - INT8 quantization: ~16GB VRAM - use with 20GB+ GPUs
+    Models:
+    - FLUX.2-klein-4B: ~17GB peak, Apache 2.0, fast (~1s for 1024x1024)
+    - FLUX.2-klein-9B: ~26GB peak (BF16), ~18GB (FP8), non-commercial
+
+    Set MODEL_ID env var to override: "4B" or "9B" (default: 4B for 24GB GPUs)
     """
 
-    model_id: str = "black-forest-labs/FLUX.2-klein-9B"
+    model_id: str = field(default_factory=lambda: os.environ.get(
+        "MODEL_ID", "black-forest-labs/FLUX.2-klein-4B"
+    ).replace("4B", "black-forest-labs/FLUX.2-klein-4B").replace("9B", "black-forest-labs/FLUX.2-klein-9B"))
     torch_dtype: torch.dtype = field(default_factory=lambda: torch.bfloat16)
-    quantization: QuantizationMode = "none"  # "none" for 32GB+, "fp8" for 24GB
-    enable_cpu_offload: bool = False  # Only as fallback, significantly slower
-    enable_compile: bool = False  # torch.compile for extra speed (slower first run)
+    quantization: QuantizationMode = "none"
+    enable_cpu_offload: bool = False
+    enable_compile: bool = False
     hf_token: Optional[str] = None
 
     def __post_init__(self):
-        # Get HF token from environment if not provided
         if self.hf_token is None:
             self.hf_token = os.environ.get("HUGGING_FACE_TOKEN") or os.environ.get("HF_TOKEN")
+        # Normalize model_id shortcuts
+        if self.model_id == "4B":
+            self.model_id = "black-forest-labs/FLUX.2-klein-4B"
+        elif self.model_id == "9B":
+            self.model_id = "black-forest-labs/FLUX.2-klein-9B"
 
 
 class FluxPipeline:
