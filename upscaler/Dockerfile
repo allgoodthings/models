@@ -82,7 +82,6 @@ RUN if [ "$INCLUDE_DEFLICKER" = "true" ]; then \
 
 # Copy source code
 COPY upscaler/ ./upscaler/
-COPY scripts/ ./scripts/
 
 # Create models directory
 RUN mkdir -p /app/models
